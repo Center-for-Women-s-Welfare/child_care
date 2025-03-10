@@ -1,0 +1,458 @@
+---
+project: "Utah_Child_Care"
+script purpose: Script calculates UT 2025 child care costs
+author: "Brian Son, Sarah Brolliar"
+date: "2024-12-11"
+validator: SBr on "2025-01-16" 
+last modified: "2025-01-17"
+last editor: "Sbr"
+---
+
+##Instructions:##
+- Update file paths and variables as needed by state
+- Ensure required libraries are installed
+
+## Editing history
+# 01/17/2025 - Add reminders for validators
+# 01/16/2025 - Edits made to filepaths for movement to the new directory made by SBr. Add tests. Standardize output
+# 01/16/2025 - Correct an error in the 2-3 year age cost file. 
+# 01/28/2025 - LMa renamed columns in final output for alignment with County data file.
+
+## Load Necessary Packages, Define File Paths
+##### Change State info
+```{r setup, include=FALSE}
+
+state <- "utah"
+state_abbrev <- "UT"
+state_abbrev_lowercase <- "ut"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+#Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+
+#Set base paths
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  "2025", 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  "2025", 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  "2025", 
+  "child_care")
+```
+
+## Notes for further adjustment
+
+Define base CPI, Define raw data reported rate (daily, monthly, annual)
+
+## State specific data
+
+```{r notes}
+#Correct landing page
+CCDF_landing_page <- "https://jobs.utah.gov/occ/occmarket.pdf"
+
+#raw_data
+raw_data <- file.path(base_path_raw, "2024 Utah child care market rate study and narrow cost analysis.pdf")
+metro_nonmetro_0_23_months <- file.path(base_path_processed, "0_23_metro_non-metro rates.xlsx") #Validated SBr, Table 3.7
+metro_nonmetro_2_3_years <- file.path(base_path_processed, "2_3_metro_non-metro rates.xlsx") #Fixed, Validated, SBr, Table 3.8, 3.9
+metro_nonmetro_4_5_years <- file.path(base_path_processed, "4_5_metro_non-metro rates.xlsx") #Validated SBr, Tables 3.10, 3.11
+metro_nonmetro_6_12_years <- file.path(base_path_processed, "6_12_metro_non-metro rates.xlsx") #Validated SBr, Tables 3.12
+
+state_geographies <- file.path(reference_path, "state_geo_list", "UT_geographies.csv")
+region_county <- file.path(base_path_processed, "geo_county.xlsx")
+region_county <- read_excel(region_county)
+region_checked_by <- "SBr"
+###########################################################Validator, check region to county
+
+# The Designation of counties in regions was pieced together via 2021 MRS, and 2023 Cost Estimation Model
+nonmetropolitan_region_source <- file.path(base_path_processed, "2021occmarket_source of metro areas.pdf")
+#Section 5.2: The regions used for analysis in this section are defined by the Office of Management and Budget (OMB) and integrated into the statistical area definitions of the Bureau of Economic Analysis (BEA) (United States Bureau of Economic Analysis, n.d.). They include five metropolitan   statistical areas (MSAs) and one nonmetropolitan area. The MSAs are Logan (Cache County), Ogden-Clearfield (including Box Elder, Davis, Morgan and Weber Counties), Provo-Orem (including Juab and Utah Counties), Salt Lake (Salt Lake and Tooele Counties), and St. George (Washington County). The remaining counties comprise the nonmetropolitan portion of the state.
+
+nonmetropolitan_region_source <- file.path(base_path_processed, "2023costmodel_source of nonmetro areas.pdf")
+#Page 25: Figure 12 shows the monthly per-child cost of childcare by child age and CCQS Rating for the
+#Logan, Ogden-Clearfield, Provo-Orem, Salt Lake City, and St. George metropolitan statistical
+#areas, and the Central Nonmetropolitan Region (including Beaver, Garfield, Iron, Kane, Millard,
+#Piute, Sanpete, Sevier, and Wayne Counties) and Eastern Nonmetropolitan Region (including
+#Carbon, Daggett, Duchesne, Emery, Grand, Rich, San Juan, Summit, Uintah, and Wasatch
+#Counties). The results are presented in ascending order of cost, with Logan at the left as the
+#region with the lowest cost of care, and the Eastern Nonmetropolitan Region on the right with
+#the highest cost of care.
+
+#Survey inputs
+#citation <- Ruetschlin, C. (2024). Utah 2024 Child Care Market Rate Study and Narrow Cost Analysis: Final Report prepared for the Utah Department of Workforce Services Office of Child Care. Salt Lake City, UT: University of Utah, Economic Evaluation Unit.
+accessed_date <- 12/8/2024
+accessed_by <- "Bso"
+calculations_by <- "BsoSbr"
+checked_by <- "Sbr"
+
+survey_start_month <- "January"
+survey_start_yr <- "2024"
+survey_end_month <- "March"
+survey_end_year <- "2024"
+base_cpi_month <- "February"
+base_cpi_year <- "2024"
+cpi_checker <- "SBr"
+###########################################################Validator, check cpi
+
+#SSS Age Definitios
+# infant = 0-2 years (up to 36 months)
+# preschooler = 3-5 years
+# school-age = 6-12 years
+
+#Utah Age Definition Ratios
+infant_0_23_months_ratio <- (2/3)
+infant_2_year_old_ratio <- (1/3)
+preschooler_3_year_old_ratio <- (1/3)
+preschooler_4_year_old_ratio <- (1/3)
+preschooler_5_year_old_ratio <- (1/3)
+school_age_60_and_more_months <- 1
+age_checker <- "SBr"
+###########################################################Validator, check state ages
+
+#All rates are reported as monthly, full-time do not need a monthly conversion 
+#weekly_monthly <- 4.33
+#hourly_monthly <- ___*5*(52/12)
+#daily_monthly <- 5*(52/12)
+monthly_conversion <- 1
+rates_checker <- "SBr"
+###########################################################Validator, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+
+```{r cleanup}
+# Function to process and add suffix to columns and standardize 'Region' column
+process_sheet_with_suffix <- function(df, age_group_suffix) {
+  # Standardize the 'Region' column name
+  df <- df %>%
+    rename_with(~ ifelse(. %in% c("Region", "Regions"), "Region", .))
+  
+  # Check and rename 'Center Licensed' column
+  if (any(grepl("^Center Licensed", colnames(df)))) {
+    df <- df %>%
+      rename_with(
+        ~ paste0(., "_", age_group_suffix),
+        starts_with("Center Licensed")
+      )
+  }
+  
+  # Check and rename 'Family Licensed' column
+  if (any(grepl("^Family Licensed", colnames(df)))) {
+    df <- df %>%
+      rename_with(
+        ~ paste0(., "_", age_group_suffix),
+        starts_with("Family Licensed")
+      )
+  }
+  
+  return(df)
+}
+
+# Load datasets and process each with their respective suffix
+metro_nonmetro_0_23_months <- read_excel(metro_nonmetro_0_23_months, sheet = 1) %>%
+  process_sheet_with_suffix("0_23_months")
+
+metro_nonmetro_2_years <- read_excel(metro_nonmetro_2_3_years, sheet = 1) %>%
+  process_sheet_with_suffix("2_years")
+
+metro_nonmetro_3_years <- read_excel(metro_nonmetro_2_3_years, sheet = 2) %>%
+  process_sheet_with_suffix("3_years")
+
+metro_nonmetro_4_5_years_sheet1 <- read_excel(metro_nonmetro_4_5_years, sheet = 1) %>%
+  process_sheet_with_suffix("4_years")
+
+metro_nonmetro_5_years <- read_excel(metro_nonmetro_4_5_years, sheet = 2) %>%
+  process_sheet_with_suffix("5_years")
+
+metro_nonmetro_6_12_years_sheet1 <- read_excel(metro_nonmetro_6_12_years, sheet = 1) %>%
+  process_sheet_with_suffix("6_12_years")
+
+# Combine datasets iteratively using a loop
+sheet_list <- list(
+  metro_nonmetro_0_23_months,
+  metro_nonmetro_2_years,
+  metro_nonmetro_3_years,
+  metro_nonmetro_4_5_years_sheet1,
+  metro_nonmetro_5_years,
+  metro_nonmetro_6_12_years_sheet1
+)
+
+# Initialize the combined dataset with the first sheet
+combined_data <- sheet_list[[1]]
+
+# Loop through the remaining sheets and join by 'Region'
+for (i in 2:length(sheet_list)) {
+  combined_data <- full_join(combined_data, sheet_list[[i]], by = "Region")
+}
+```
+
+## Calculate the data by age groups
+
+```{r calculate the averages and Weighted SSS categories}
+# Process combined data to calculate weighted averages and rename columns
+combined_data <- combined_data %>%
+  # Combine Infant Center
+  mutate(
+    Infant_Center = `Center Licensed_0_23_months` * infant_0_23_months_ratio +
+      `Center Licensed_2_years` * infant_2_year_old_ratio,
+    Infant_Family = `Family Licensed_0_23_months` * infant_0_23_months_ratio +
+      `Family Licensed_2_years` * infant_2_year_old_ratio
+  ) %>%
+  select(-`Center Licensed_0_23_months`, -`Center Licensed_2_years`,
+         -`Family Licensed_0_23_months`, -`Family Licensed_2_years`) %>%
+  # Combine Preschooler Center
+  mutate(
+    Preschooler_Center = rowMeans(select(., 
+                                         `Center Licensed_3_years`, 
+                                         `Center Licensed_4_years`, 
+                                         `Center Licensed_5_years`), 
+                                  na.rm = TRUE),
+    Preschooler_Family = rowMeans(select(., 
+                                         `Family Licensed_3_years`, 
+                                         `Family Licensed_4_years`, 
+                                         `Family Licensed_5_years`), 
+                                  na.rm = TRUE)
+  ) %>%
+  select(-`Center Licensed_3_years`, -`Center Licensed_4_years`, -`Center Licensed_5_years`,
+         -`Family Licensed_3_years`, -`Family Licensed_4_years`, -`Family Licensed_5_years`) %>%
+  # Rename School Age columns
+  rename(
+    `School_Age_Center_Fulltime` = `Center Licensed_6_12_years`,
+    `School_Age_Family_Fulltime` = `Family Licensed_6_12_years`) 
+```
+
+##SSS Create school-age part time values from full time values, the school-age yearly values
+
+```{r calculate the school-age parttime values}
+ combined_data <- combined_data %>%
+  # Define School Age parttime care
+  mutate(
+    `School_Age_Center_Parttime` = `School_Age_Center_Fulltime` * parttime_conversion, 
+    `School_Age_Family_Parttime` = `School_Age_Family_Fulltime` * parttime_conversion) %>%
+  #Define School-age monthly care
+  mutate(
+    `School_Age_Center_Monthly` = `School_Age_Center_Parttime` * before_after_school_care + 
+      `School_Age_Center_Fulltime` * full_time_care, 
+    `School_Age_Family_Monthly` = `School_Age_Family_Parttime`* before_after_school_care + 
+      `School_Age_Family_Fulltime` * full_time_care) %>%
+  #Drop extra schoolage columns
+  select(-`School_Age_Family_Fulltime`, -`School_Age_Family_Parttime`, -`School_Age_Center_Fulltime`, -`School_Age_Center_Parttime`)
+```
+
+##Assign SSS Definitions ratios for Family and Center Licensed Calculation
+
+```{r calculate the averages and Weighted SSS categories}
+# Combine datasets iteratively using a loop
+# (Previous steps for loading and combining datasets remain unchanged)
+
+# Calculate SSS_School_Age
+SSS_combined_data <- combined_data %>%
+  # Step 1: Multiply `School_Age_Center` by school_center_weight
+  mutate(School_Age_Center_Weighted = `School_Age_Center_Monthly` * school_center_weight) %>%
+  
+  # Step 2: Multiply `School_Age_Family` by school_home_weight
+  mutate(School_Age_Family_Weighted = `School_Age_Family_Monthly` * school_home_weight) %>%
+  
+  # Step 3: Sum the weighted columns to create `SSS_School_Age`
+  mutate(School_Age = School_Age_Center_Weighted + School_Age_Family_Weighted) %>%
+  
+  # Step 4: Remove intermediate and original columns
+  select(-`School_Age_Center_Monthly`, -`School_Age_Family_Monthly`, 
+         -School_Age_Center_Weighted, -School_Age_Family_Weighted)
+
+# Calculate SSS_Preschooler
+SSS_combined_data <- SSS_combined_data %>%
+  # Step 1: Multiply `Preschooler_Center` by preschooler_center_weight
+  mutate(Preschooler_Center_Weighted = `Preschooler_Center` * preschooler_center_weight) %>%
+  
+  # Step 2: Multiply `Preschooler_Family` by preschooler_home_weight
+  mutate(Preschooler_Family_Weighted = `Preschooler_Family` * preschooler_home_weight) %>%
+  
+  # Step 3: Sum the weighted columns to create `SSS_Preschooler`
+  mutate(Preschool = Preschooler_Center_Weighted + Preschooler_Family_Weighted) %>%
+  
+  # Step 4: Remove intermediate and original columns
+  select(-`Preschooler_Center`, -`Preschooler_Family`, 
+         -Preschooler_Center_Weighted, -Preschooler_Family_Weighted)
+
+# Calculate SSS_Infant
+SSS_combined_data <- SSS_combined_data %>%
+  # Step 1: Multiply `Infant_Center` by infant_center_weight
+  mutate(Infant_Center_Weighted = `Infant_Center` * infant_center_weight) %>%
+  
+  # Step 2: Multiply `Infant_Family` by infant_home_weight
+  mutate(Infant_Family_Weighted = `Infant_Family` * infant_home_weight) %>%
+  
+  # Step 3: Sum the weighted columns to create `SSS_Infant`
+  mutate(Infant = Infant_Center_Weighted + Infant_Family_Weighted) %>%
+  
+  # Step 4: Remove intermediate and original columns
+  select(-`Infant_Center`, -`Infant_Family`, 
+         -Infant_Center_Weighted, -Infant_Family_Weighted)
+
+# Rename non-metro regions to align with joined dataframe. 
+SSS_combined_data <- SSS_combined_data %>%
+  mutate(
+    Region = case_when(
+      Region == "Central Nonmetropolitan" ~ "Central Nonmetropolitan Region",
+      Region == "Eastern Nonmetropolitan" ~ "East Nonmetropolitan Region",
+      TRUE ~ Region  # Keep other rows unchanged
+    )
+  )
+
+```
+
+## Assign costs to counties, and county fips codes.
+
+```{r Join SSS weighted dataframe into region to county dataset}
+# Load new dataset `regioncounty`
+#region_county <- read_excel(region_county) #Already done above to allow for early validation
+
+# Join new dataset onto `SSS_combined_data`
+UT25_Childcare <- SSS_combined_data %>%
+  left_join(region_county, by = "Region") %>%
+  relocate(County, .before = Infant) %>%
+  select(-Region)
+
+state_geographies <- read_csv(state_geographies)
+
+# Step 1: Rename the "County" column to "countyname" in `UT25_Childcare`
+UT25_Childcare <- UT25_Childcare %>%
+  rename(countyname = County)
+
+# Step 2: Perform the join with `geo_county` using the renamed column
+UT25_Childcare <- state_geographies %>%
+  left_join(UT25_Childcare, by = "countyname")
+
+# Step 3: Reorder columns so `Infant`, `Preschool`, and `School_Age` come right after `county_town_name`
+final_result <- UT25_Childcare %>%
+  relocate(Infant, Preschool, School_Age, .after = pop2022)
+
+# Step 4: View the final output to verify
+print(head(final_result))
+```
+# Update column names
+
+```{r rename columns}
+
+# Rename columns in the dataframe
+final_result <- final_result %>%
+  rename(
+    infant = Infant,
+    preschooler = Preschool,
+    school_age = `School_Age`
+  )
+
+
+```
+#Test for missing values
+
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+
+```
+
+#Save file
+
+```{r}
+
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+```

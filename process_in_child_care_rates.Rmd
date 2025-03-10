@@ -1,0 +1,282 @@
+---
+title: "IN2025 childcare"
+author: "Sarah Brolliar"
+date: "2025-02-04"
+output: html_document
+last modified: "2025-02-04"
+last editor: "Sbr"
+---
+
+## Editing history
+
+## Load Necessary Packages, Define File Paths
+
+
+```{r setup, include=FALSE}
+
+state <- "indiana"
+state_abbrev <- "IN"
+state_abbrev_lowercase <- "in"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+#Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+
+#Set base paths
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+
+```
+  
+## State specific data
+Define base CPI Define raw data reported rate (daily, monthly, annual)
+
+```{r notes}
+#CCDF_landing_page <- Brigher Futures for Indiana Data Center, https://brighterfuturesindiana.org/data-center#, accessed January 27, 2025
+region_map <- "https://www.in.gov/fssa/carefinder/files/LCC-RR-Services-Provider-Map.pdf"
+
+
+#raw data
+processed_data_source <- file.path(base_path_processed, "IN2025_childcare_20250207_Sbr.xlsx")
+
+########Two raw costs could be applied to a county: region or county specific. 
+# - County costs were applied when both home and center costs were present, and the number of eligible programs was 10 or greater. 
+# - region costs were applied when a center or home cost was missing, and/or the sample size for either home or center was less than 10. 
+# - exception: when county costs were compared with the previous year's inflated child care values, in a single instance the county costs lowered the cost of child care more than applying regional costs did. Since previous year's costs were based on long distance (5+ year child care market rate survey) data that was inflated, it is unlikely that costs decreased. This happened in a single county: Jennings. Jennings county showed high data inconsistencies, particularly in school-age counties. (annual of $3,900 whereas the lowest anywhere else was $5,600 and $6K in center and home respectively.) Therefore, regional costs were applied.
+#Costs were still allowed to decrease with respect to the past. Only when costs decreased more by applying county specific rates than applying regional specific rates were regional rates favored. 
+
+
+state_geographies <- file.path(reference_path, "state_geo_list", "IN_geographies.csv")
+region_to_county <- file.path(base_path_processed, "IN2025_region_to_county.xlsx")
+region_checked_by <- "SBr"
+###########################################################Validator, check region to county
+  
+#Survey inputs
+citation <- "     " 
+accessed_date <- "February 7, 2025"  
+accessed_by <- "Aku"
+calculations_by <- "Sbr"
+checked_by <- "  "
+
+#Survey period
+base_cpi_month <- "December"
+base_cpi_year <- "2024"
+cpi_checker <- "Sbr"
+###########################################################Validator, check cpi
+  
+# state age definitions
+
+# IN age groups on site are divided into 7 categories, reported weekly, without any indication of center or home cost distribution. Average annual costs are reported by infants and toddlers, preschool, and school age, with divisions of center, home, and ministry. The latter are used. Each of the three age categories encompasses the entire age bracket, hence no ratios are defined. 
+# Non facility specific age groups - not used. 
+#infant_6w_12_months <- 
+#toddler_12_23_months <- 
+#toddler_24_35_months <- 
+#preschooler_3_years <- 
+#pre_k_4_5_years <- 
+#school_age_full_day <- 
+#school_age_before_after <- 
+  
+#IN age groups reported by average costs and care type (center, home, ministry)
+#infants_and_toddlers <- 1
+#preschooler <- 1
+#school_age_ <- 1
+age_checker <- "  "
+
+#Note: School age annual rates appear to take full-time summer care and before and after school care into account. Therefore, this script only uses 1 school age value, without the need to generate or account for part time and full time values.
+school_age_conversion_validator <- " "
+###########################################################Validator, check state ages, school_age_conversion
+
+#IN has annual rates
+reported_rate <- "annual"
+#convert weekly to monthly
+#daily_monthly <- 5*(52/12)
+#weekly_monthly <- 4.33
+#annual_monthly <- (1/12)
+monthly_conversion <- (1/12)
+rates_checker <- " "
+###########################################################Validator, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset, convert to monthly costs
+
+```{r cleanup}
+# Cleanup the dataset for Group and School Care
+raw_data <- read_excel(processed_data_source, sheet = 1)
+
+#Delete extra columns
+raw_data_cleaned <- raw_data %>%
+  select(-c(5:12))
+
+#convert annual costs to monthly
+raw_data_cleaned_monthly <- raw_data_cleaned %>%
+  mutate(across(7:12, ~ .x * monthly_conversion))
+
+raw_data_cleaned2 <- raw_data_cleaned_monthly %>%
+  select(-c(4:5))
+
+```
+
+
+#Confirm transformation
+```{r}
+#No SSS age transformation needed, rename it now. 
+SSS_ages <- raw_data_cleaned2
+
+rm(raw_data_cleaned, raw_data_cleaned_monthly, raw_data_cleaned2)
+
+```
+## Create monthly costs weighted by facility type
+
+```{r facility weight}
+
+#Multiply cost by their facility weight
+SSS_ages_facility <- SSS_ages %>%
+ mutate(
+    infant_home_weight = `Infants and Toddlers_Home` * infant_home_weight,
+    preschooler_home_weight = `Preschool_Home` * preschooler_home_weight,
+    schoolage_home_weight = `School_ageHome` * school_home_weight,
+    infant_center_weight = `Infants and Toddlers_Center` * infant_center_weight,
+    preschooler_center_weight = `Preschool_Center` * preschooler_center_weight,
+    schoolage_center_weight = `School_age_Center` * school_center_weight
+     ) %>% #Remove unweighted values
+  select(-`Infants and Toddlers_Center`, -`Infants and Toddlers_Home`, -`Preschool_Center`, -`Preschool_Home`, -`School_age_Center`, -`School_ageHome`   
+    )
+
+#Sum age and facility weights for one final cost
+semi_final_results <- SSS_ages_facility %>%
+  mutate(
+    infant = infant_home_weight + infant_center_weight,
+    preschooler = preschooler_home_weight + preschooler_center_weight, 
+    school_age = schoolage_home_weight + schoolage_center_weight
+  ) %>% #Remove earlier values
+  select(-infant_center_weight, -infant_home_weight, -preschooler_home_weight, -preschooler_center_weight, -schoolage_home_weight, -schoolage_center_weight)
+
+#Remove SDA region, cost applied (everything that doesn't end up in the final childcare data)
+IN2025 <- semi_final_results %>%
+  select(-`SDA Region`, -`Cost applied`, -`County`)
+  
+
+```
+
+```{r}
+state_geographies <- read.csv(state_geographies)
+
+# Join the two datasets by "county_town_name"
+final_result <- state_geographies %>%
+  left_join(IN2025, by = "countyname")
+
+```
+
+#Test for missing values
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+
+```
+
+```{r}
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+```

@@ -1,0 +1,594 @@
+---
+title: "Minnesota_Child_Care"
+author: "Brian Son"
+date: "2024-12-3"
+last modified: "2025-01-17"
+last editor: "Sbr"
+---
+
+##Instructions:##
+- Update file paths and variables as needed by state
+
+## Editing history
+# 02/03/2025 - Sbr created school-age part time values. Added the variable to the unassinged counties correction chunk. Created final school-age values. Labeled final output appropriately. Moved monthly conversion to the end. 
+################# School-age part time values still not calculated (was not separated). Final result not checked - values still had weighted after it. 
+# 1/31/2025 - Sbr Multiplied cleaned data by monthly conversion rate for the unassigned counties. 
+# 01/29/2025 - BSo, update citation, fix output columns
+# 01/24/2025 - changed certain dataframe names to fit with new naming conventions to track data cleaning. Adjusted the function giving values to unassigned counties. For counties with multiple adjacent cluster values, the function now averages the weighted costs. (ie. 1, 1, 2, 2, 2, 3 adjusts each cluster's contribution proportionately)
+# 01/17/2025 - Add validater reminders
+# 01/16/2025 - Edits made to filepaths for movement to the new directory made by SBr, add test, standardize output. 
+# 01/16/2025 -  
+
+## Load Necessary Packages, Define File Paths
+  
+```{r setup, include=FALSE}
+
+state <- "minnesota"
+state_abbrev <- "MN"
+state_abbrev_lowercase <- "mn"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+#Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+
+#Set base paths
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+```
+
+## Notes for further adjustment
+
+Define base CPI Define raw data reported rate (daily, monthly, annual)
+
+###################################Update the citation to 2024
+###################################Check 
+```{r notes}
+#Correct landing page
+CCDF_landing_page <- "https://edocs.dhs.state.mn.us/lfserver/Public/DHS-6226H-ENG"
+
+#raw_data
+raw_data_source <- file.path(base_path_raw, "Final Report for the 2024 Child Care Market Price Analysis.pdf")
+#exported_raw_data
+center_table <- file.path(base_path_processed,"Child Care Center Table.xlsx")
+family_care_table <- file.path(base_path_processed, "Licensed Family Child Care Table.xlsx")
+
+#The regions are referred to as clusters and the county list is combined with the clusters per type of facility 
+state_geographies <- file.path(reference_path, "state_geo_list", "MN_geographies.csv")
+county_list <-  file.path(base_path_processed, "Cluster Assignments per county and facility type.xlsx")
+county_list <- read_excel(county_list)
+region_checked_by <- "Sbr"
+###########################################################Validator, check region to county
+
+#Survey inputs
+#citation <- "Department of Human Services (2024). Final Report for the 2024 Child Care Market Price Analysis"
+accessed_date <- 12/3/2024
+accessed_by <- "Bso"
+calculations_by <- "Bso"
+
+#"The analysis was based on responses from 1,358 center-based providers and 3,693 family child care providers, representing 64% of all providers contacted. The research team also examined changes to provider pricing and capacity between 2021 and 2024."
+survey_start_month <- "October"
+survey_start_yr <- "2023"
+survey_end_month <- "February"
+survey_end_year <- "2024"
+print(survey_CPI_month <- "December")
+print(survey_CPI_year <- "2023")
+cpi_checker <- "Sbr"
+###########################################################Validator, check cpi
+
+#state age definitions: there are different age definitions depending on whether it is a child care center and family child care.  - It was decided not to standardize these ages to the standard for fear of underestimating costs. Families have a choice about which facility they use. Leave the age definitions as they are, but as always, including facility ratios, will best represent the reality for MN costs. Sbr and Aku made this decision on 1/21/2025.
+
+##Child Care Center
+##0-16 months = infant = .5
+##16-33 months = toddler = .5
+##33-60 months = preschool = 1.0
+##60+ months = school-age = 1.0
+
+##Family Child Care
+##0-16 months = infant = .5
+##12-24 months = toddler = .5
+##24-60 months = preschool = 1.0
+##60+ months = school-age = 1.0
+
+#Minnesota Age Definition Ratios
+
+infant_0_16_months <- .5
+infant_16_33_months <- .5
+preschooler_33_60_months <- 1.0
+school_age <- 1.0
+age_checker <- "Sbr"
+###########################################################Validator, check state ages
+
+#All rates are reported as hourly, daily, and weekly, full-time. Select the weekly when possible.
+#weekly_monthly <- 4.33
+#hourly_monthly <- ___*5*(52/12)
+#daily_monthly <- 5*(52/12)
+monthly_conversion <- 4.33
+rates_checker <- "Sbr"
+###########################################################Validator, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+
+```{r cleanup}
+
+# Load the first sheet
+childcare_dirty <- read_excel(center_table, sheet = 1)
+
+# Load the second sheet
+familycare_dirty <- read_excel(family_care_table, sheet = 1)
+
+### SBR Consolidated the code here. 
+# Select only the specified columns, remove the first 2 rows, and fill NA values in column 1 for childcare
+childcare_clean1 <- childcare_dirty %>%
+  select(`Center Price Cluster`, `Age Group`, `Weekly 75th percentile`) %>%
+  slice(-1, -2) %>%
+  fill(`Center Price Cluster`, .direction = "down") 
+
+#Pivot the rows and columns
+childcare_clean2 <- childcare_clean1 %>%
+select(`Center Price Cluster`, `Age Group`, `Weekly 75th percentile`) %>%
+  #slice(-1, -2) %>%
+  #fill(`Family child care price cluster`, .direction = "down") %>%
+  pivot_wider(
+    names_from = `Age Group`,
+    values_from = `Weekly 75th percentile`
+  ) 
+
+# Select only the specified columns, remove the first 2 rows, and fill NA values in column 1 for familycare
+familycare_clean1 <- familycare_dirty %>%
+  select(`Family child care price cluster`, `Age Group`, `Weekly 75th percentile`) %>%
+  slice(-1, -2) %>%
+  fill(`Family child care price cluster`, .direction = "down")  # Fill NAs with the previous value
+
+#Pivot the rows and columns
+familycare_clean2 <- familycare_clean1 %>%
+  select(`Family child care price cluster`, `Age Group`, `Weekly 75th percentile`) %>%
+  #slice(-1, -2) %>%
+  #fill(`Family child care price cluster`, .direction = "down") %>%
+  pivot_wider(
+    names_from = `Age Group`,
+    values_from = `Weekly 75th percentile`
+  )
+```
+########Confirm successful transformation from dirty to clean2. 
+#Remove extra dfs.
+```{r}
+##################### Remove extra dataframes after confirming correct transformation
+Confirmed_cleaning <- "Sbr"
+
+#Rename the cleaned data
+childcare_cleaned <- childcare_clean2
+familycare_cleaned <- familycare_clean2
+
+#Remove extra dataframes
+rm(childcare_dirty, childcare_clean1, childcare_clean2, familycare_dirty, familycare_clean1, familycare_clean2)
+
+```
+
+#Average infant and toddler costs to create infant costs. 
+
+```{r}
+## Now combining Infant and Toddler columns and dividing it by the ratio respective to facility
+# Process and clean the childcare data
+childcare_sss_ages <- childcare_cleaned %>%
+  mutate(
+    Infant = rowMeans(select(., Infant, Toddler), na.rm = TRUE)  # AVerage the Infant and Toddler
+  ) %>%
+  select(-Toddler)  # Remove the Toddler column
+
+# Repeating the same processes above and cleaning the familycare data by removing the toddler column
+familycare_sss_ages <- familycare_cleaned %>%
+  mutate(
+    Infant = rowMeans(select(., Infant, Toddler), na.rm = TRUE)  # Combine Infant and Toddler
+  ) %>%
+  select(-Toddler)
+
+```
+
+#Create school part-time care costs.
+```{r}
+#Multiply the school-age full time costs by the parttime conversion factor. The weekly rate was used, rather than the daily or hourly rate, because the latter options grossly over-estimate costs. 
+
+childcare_sss_ages1 <- childcare_sss_ages %>%
+  mutate(
+    school_age_parttime = (`School age` * parttime_conversion)
+  )
+
+familycare_sss_ages1 <- familycare_sss_ages %>%
+  mutate(
+    school_age_parttime = (`School age` * parttime_conversion)
+  )
+
+```
+
+#Rename data frame after confirming age changes (to preserve df names in the code after edits were made earlier in the code)
+```{r}
+childcare_cleaned <- childcare_sss_ages1 
+familycare_cleaned <- familycare_sss_ages1
+
+rm(childcare_sss_ages, familycare_sss_ages, childcare_sss_ages1, familycare_sss_ages1)
+```
+
+#SBr comment: In the future, label the values from center vs. family when joining them to the county sheet for transparency. Sbr checked to ensure correct assignment this time. 
+```{r County Data Merge}
+# Renamed columns in county_list to match with the cleaned family and center dataframes so both dataframes could join with the county list dataframe
+county_list <- county_list %>%
+  rename(
+    `Center Price Cluster` = `Center-based price cluster assignment`,
+    `Family child care price cluster` = `Family child care price cluster assignment`
+  )
+
+# Ensure consistent data types for joining
+childcare_cleaned <- childcare_cleaned %>%
+  mutate(`Center Price Cluster` = as.character(`Center Price Cluster`))
+
+familycare_cleaned <- familycare_cleaned %>%
+  mutate(`Family child care price cluster` = as.character(`Family child care price cluster`))
+
+county_list <- county_list %>%
+  mutate(
+    `Center Price Cluster` = as.character(`Center Price Cluster`),
+    `Family child care price cluster` = as.character(`Family child care price cluster`)
+  )
+
+# Step 1: Join childcare_cleaned to county_list on "Center Price Cluster"
+county_list_with_childcare <- county_list %>%
+  left_join(childcare_cleaned, by = "Center Price Cluster")
+
+# Step 2: Join familycare_cleaned to the updated county_list on "Family child care price cluster"
+final_county_list <- county_list_with_childcare %>%
+  left_join(familycare_cleaned, by = "Family child care price cluster")
+```
+
+#Convert costs to monthly 
+############## Moved to end - converting here was causing issues
+```{r Multiply the daily to monthly conversion}
+# Multiply the specified columns by the monthly_conversion factor with respect to all the values in the final county list joined dataframe 
+
+#final_county_list <- final_county_list %>%
+#  mutate(
+#    across(
+#      c(`Infant.x`, `Preschool.x`, `School age.x`, `school_age_parttime.x`, `Infant.y`, `Preschool.y`, `School age.y`, `school_age_parttime.y`),
+#      ~ . * monthly_conversion
+#    )
+#  )
+
+
+#childcare_cleaned <- childcare_cleaned %>%
+#  mutate(
+#    across(
+#      c(`Infant`, `Preschool`, `School age`), 
+#  ~ . * monthly_conversion    
+#    )
+#  )
+
+#familycare_cleaned <- familycare_cleaned %>%
+#  mutate(
+#    across(
+#      c(`Infant`, `Preschool`, `School age`), 
+#  ~ . * monthly_conversion    
+#    )
+#  )
+
+```
+
+#Assign child care values to unassigned counties based on the surrounding counties costs. Cost is weighted by the frequency of a particular cluster surrounding the county. 
+```{r Reorganize final county list / fill in the averages for county's with missing data}
+## This is to find the value of all unassigned counties in Minnesota specifically the Center-based facilities. We calculated the price by averaging the counties around each respective county. The daily_monthly conversion was not being pulled again so I made a parameter. Reorganize the final county list to have the numbers respective to the facilty type 
+# Relocate Infant.x, Preschool.x, and School age.x next to Center Price Cluster
+
+# Ensure numeric conversion for childcare_cleaned columns
+childcare_cleaned <- childcare_cleaned %>%
+  mutate(
+    Infant = as.numeric(Infant),
+    Preschool = as.numeric(Preschool),
+    `School age` = as.numeric(`School age`),
+    `school_age_parttime` = as.numeric(school_age_parttime)
+  )
+############ Function edited to weight the contribution of each surrounding county
+# Function to calculate the average of cluster values for a given county
+calculate_manual_average <- function(county, column_name, cluster_data) {
+  clusters <- county_cluster_values[[county]]  # Get cluster values for the county
+ # mean(cluster_data[[column_name]][cluster_data$`Center Price Cluster` %in% clusters], na.rm = TRUE)  # Calculate average
+#}
+# Create a dataframe of the cluster frequencies
+  cluster_freq <- table(clusters)
+  
+  # Calculate the weighted average
+  mean_weighted <- sum(
+    cluster_freq * cluster_data[[column_name]][as.numeric(names(cluster_freq))],
+    na.rm = TRUE
+  ) / sum(cluster_freq)
+  
+  return(mean_weighted)
+}
+  
+county_cluster_values <- list(
+  "Big Stone" = c(1, 1, 1),
+  "Clearwater" = c(1, 1, 2, 2, 2, 3),
+  "Grant" = c(2, 2, 1),
+  "Koochiching" = c(1, 2, 2),
+  "Lake of the Woods" = c(2, 2, 2),
+  "Lincoln" = c(1, 1, 1, 1),
+  "Rock" = c(1, 1, 1),
+  "Roseau" = c(1, 2, 2),
+  "Traverse" = c(1, 2),
+  "Wilkin" = c(2, 2)
+)
+
+#Grant adjusted to not include Pope county. Grant was unassigned then, and Pope wasn't included in 2021. 
+#Lake of the Woods was assigned its neighboring non-assigned category in 2021. Pattern holds.
+#Traverse had 2 adjacent in 2021. Only has 1 now. Included a second county possibly represent the shift towards 2 on its North End
+#Wilkin has 2, 2 adjacent. Neighboring Grant, Traverse are unassigned. Historically, Wilkin matched Otter trail. Leave as is. 
+
+# Fill missing values and convert daily to monthly for the newly assigned values
+final_county_list_with_unassigned_values <- final_county_list %>%
+  mutate(
+    `Infant.x` = case_when(
+      `County name` == "Big Stone" & is.na(`Infant.x`) ~ calculate_manual_average("Big Stone", "Infant", childcare_cleaned),
+      `County name` == "Clearwater" & is.na(`Infant.x`) ~ calculate_manual_average("Clearwater", "Infant", childcare_cleaned),
+      `County name` == "Grant" & is.na(`Infant.x`) ~ calculate_manual_average("Grant", "Infant", childcare_cleaned),
+      `County name` == "Koochiching" & is.na(`Infant.x`) ~ calculate_manual_average("Koochiching", "Infant", childcare_cleaned),
+      `County name` == "Lake of the Woods" & is.na(`Infant.x`) ~ calculate_manual_average("Lake of the Woods", "Infant", childcare_cleaned),
+      `County name` == "Lincoln" & is.na(`Infant.x`) ~ calculate_manual_average("Lincoln", "Infant", childcare_cleaned),
+      `County name` == "Rock" & is.na(`Infant.x`) ~ calculate_manual_average("Rock", "Infant", childcare_cleaned),
+      `County name` == "Roseau" & is.na(`Infant.x`) ~ calculate_manual_average("Roseau", "Infant", childcare_cleaned),
+      `County name` == "Traverse" & is.na(`Infant.x`) ~ calculate_manual_average("Traverse", "Infant", childcare_cleaned),
+      `County name` == "Wilkin" & is.na(`Infant.x`) ~ calculate_manual_average("Wilkin", "Infant", childcare_cleaned),
+      TRUE ~ `Infant.x`  # Retain existing values
+    ),
+    `Preschool.x` = case_when(
+      `County name` == "Big Stone" & is.na(`Preschool.x`) ~ calculate_manual_average("Big Stone", "Preschool", childcare_cleaned),
+      `County name` == "Clearwater" & is.na(`Preschool.x`) ~ calculate_manual_average("Clearwater", "Preschool", childcare_cleaned),
+      `County name` == "Grant" & is.na(`Preschool.x`) ~ calculate_manual_average("Grant", "Preschool", childcare_cleaned),
+      `County name` == "Koochiching" & is.na(`Preschool.x`) ~ calculate_manual_average("Koochiching", "Preschool", childcare_cleaned),
+      `County name` == "Lake of the Woods" & is.na(`Preschool.x`) ~ calculate_manual_average("Lake of the Woods", "Preschool", childcare_cleaned),
+      `County name` == "Lincoln" & is.na(`Preschool.x`) ~ calculate_manual_average("Lincoln", "Preschool", childcare_cleaned),
+      `County name` == "Rock" & is.na(`Preschool.x`) ~ calculate_manual_average("Rock", "Preschool", childcare_cleaned),
+      `County name` == "Roseau" & is.na(`Preschool.x`) ~ calculate_manual_average("Roseau", "Preschool", childcare_cleaned),
+      `County name` == "Traverse" & is.na(`Preschool.x`) ~ calculate_manual_average("Traverse", "Preschool", childcare_cleaned),
+      `County name` == "Wilkin" & is.na(`Preschool.x`) ~ calculate_manual_average("Wilkin", "Preschool", childcare_cleaned),
+      TRUE ~ `Preschool.x`  # Retain existing values
+    ),
+    `School age.x` = case_when(
+      `County name` == "Big Stone" & is.na(`School age.x`) ~ calculate_manual_average("Big Stone", "School age", childcare_cleaned),
+      `County name` == "Clearwater" & is.na(`School age.x`) ~ calculate_manual_average("Clearwater", "School age", childcare_cleaned),
+      `County name` == "Grant" & is.na(`School age.x`) ~ calculate_manual_average("Grant", "School age", childcare_cleaned),
+      `County name` == "Koochiching" & is.na(`School age.x`) ~ calculate_manual_average("Koochiching", "School age", childcare_cleaned),
+      `County name` == "Lake of the Woods" & is.na(`School age.x`) ~ calculate_manual_average("Lake of the Woods", "School age", childcare_cleaned),
+      `County name` == "Lincoln" & is.na(`School age.x`) ~ calculate_manual_average("Lincoln", "School age", childcare_cleaned),
+      `County name` == "Rock" & is.na(`School age.x`) ~ calculate_manual_average("Rock", "School age", childcare_cleaned),
+      `County name` == "Roseau" & is.na(`School age.x`) ~ calculate_manual_average("Roseau", "School age", childcare_cleaned),
+      `County name` == "Traverse" & is.na(`School age.x`) ~ calculate_manual_average("Traverse", "School age", childcare_cleaned),
+      `County name` == "Wilkin" & is.na(`School age.x`) ~ calculate_manual_average("Wilkin", "School age", childcare_cleaned),
+      TRUE ~ `School age.x`  # Retain existing values
+    ), 
+    `school_age_parttime.x` = case_when(
+    `County name` == "Big Stone" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Big Stone", "school_age_parttime", childcare_cleaned),
+      `County name` == "Clearwater" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Clearwater", "school_age_parttime", childcare_cleaned),
+      `County name` == "Grant" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Grant", "school_age_parttime", childcare_cleaned),
+      `County name` == "Koochiching" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Koochiching", "school_age_parttime", childcare_cleaned),
+      `County name` == "Lake of the Woods" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Lake of the Woods", "school_age_parttime", childcare_cleaned),
+      `County name` == "Lincoln" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Lincoln", "school_age_parttime", childcare_cleaned),
+      `County name` == "Rock" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Rock", "school_age_parttime", childcare_cleaned),
+      `County name` == "Roseau" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Roseau", "school_age_parttime", childcare_cleaned),
+      `County name` == "Traverse" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Traverse", "school_age_parttime", childcare_cleaned),
+      `County name` == "Wilkin" & is.na(`school_age_parttime.x`) ~ calculate_manual_average("Wilkin", "school_age_parttime", childcare_cleaned),
+      TRUE ~ `school_age_parttime.x`  # Retain existing values
+    )
+  )
+```
+
+#Create final combined school-age value
+```{r}
+final_county_list_with_unassigned_values <- final_county_list_with_unassigned_values %>%
+  mutate(
+    school_age.x = (`School age.x` * full_time_care) + (`school_age_parttime.x` * before_after_school_care), 
+    school_age.y = (`School age.y` * full_time_care) + (`school_age_parttime.y` * before_after_school_care), 
+    ) %>%
+  select(-`School age.x`, -`School age.y`, -`school_age_parttime.x`, -`school_age_parttime.y`)
+
+```
+
+#Assign Facility Weights, re-name final columns to correct values (infant, preschooler, school_age)
+```{r assign facility weights}
+# Apply SSS weights for both center-based (.x) and family-based (.y) care
+final_county_list_with_weights <- final_county_list_with_unassigned_values %>%
+  mutate(
+    # Weighted costs for infants
+    `Infant Center Weighted` = `Infant.x` * infant_center_weight,
+    `Infant Family Weighted` = `Infant.y` * infant_home_weight,
+
+    # Weighted costs for preschoolers
+    `Preschool Center Weighted` = `Preschool.x` * preschooler_center_weight,
+    `Preschool Family Weighted` = `Preschool.y` * preschooler_home_weight,
+
+    # Weighted costs for school-age children (center-based care)
+    `School Center Weighted` = `school_age.x` * school_center_weight * before_after_school_care + 
+                               `school_age.x` * school_center_weight * full_time_care,
+    `School Family Weighted` = `school_age.y` * school_home_weight * before_after_school_care + 
+                               `school_age.y` * school_home_weight * full_time_care
+  ) %>%
+  # Combine center and family weighted columns into single weighted columns
+  mutate(
+    `infant` = `Infant Center Weighted` + `Infant Family Weighted`,
+    `preschooler` = `Preschool Center Weighted` + `Preschool Family Weighted`,
+    `school_age` = `School Center Weighted` + `School Family Weighted`
+  ) %>%
+  # Remove intermediate weighted columns and original .x/.y columns
+  select(-`Infant Center Weighted`, -`Infant Family Weighted`, 
+         -`Preschool Center Weighted`, -`Preschool Family Weighted`, 
+         -`School Center Weighted`, -`School Family Weighted`, 
+         -`Infant.x`, -`Infant.y`, 
+         -`Preschool.x`, -`Preschool.y`, 
+         -`school_age.x`, -`school_age.y`) %>%
+         #-`Family child care price cluster`, -`Center Price Cluster`) %>%
+  # Relocate the new weighted columns to the right of 'Family child care price cluster'
+  relocate(`infant`, `preschooler`, `school_age`, .after = `Family child care price cluster`)
+
+  # Remove columns 2 and 3 from the dataframe
+  final_county_list_with_weights <- final_county_list_with_weights[, -c(2, 3)]
+  
+# Remove extra dataframes
+rm(final_county_list_with_unassigned_values, final_county_list, familycare_cleaned, county_list_with_childcare, county_list, childcare_cleaned)
+```
+
+#Convert to monthly
+```{r}
+final_county_list <- final_county_list_with_weights %>%
+  mutate(
+    across(
+      c(`infant`, `preschooler`, `school_age`),
+      ~ . * monthly_conversion
+    )
+  )
+```
+
+
+#Assign monthly costs to the state geographies list with FIPS codes
+######################################Comment: Drop the unneeded columns (Center price cluster, family price cluster, and rename the infant-weighted to just infant, etc.)
+```{r assign regions to counties}
+## Assign regions to their counties, and county fips codes.
+
+# Load the state_geographies dataframe
+state_geographies <- read.csv(state_geographies)
+
+# Add " County" to the County name column in final_county_list_with_weights
+final_county_list <- final_county_list %>%
+  mutate(`County name` = paste0(trimws(`County name`), " County"))
+
+# Standardize the countyname column in state_geographies
+#state_geographies <- state_geographies %>%
+ # mutate(countyname = tolower(trimws(countyname)))
+```
+
+```{r}
+# Merge the datasets since the for both datasets the county name column is different and that is what we are trying to merge we need the datasets to match exactly or the output will give NAs
+final_result <- merge(
+  x = state_geographies,
+  y = final_county_list,
+  by.x = "countyname",
+  by.y = "County name",
+  all.x = TRUE  # Keep all rows from state_geographies
+)
+
+# View the resulting dataframe
+head(final_result)
+```
+
+# The last dataset should always be titled final_result to keep with the following chunks
+
+#Test for missing values
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+```
+
+#Save file
+```{r}
+
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+```

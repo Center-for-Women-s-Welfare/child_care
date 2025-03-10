@@ -1,0 +1,658 @@
+---
+title: "Georgia_Child_Care"
+author: "Sarah Brolliar"
+date: "2024-11-04"
+output: html_document
+---
+
+## Editing history
+# 2/10/2025 - Convert script to new format with base paths, added tests, naming conventions, etc. Renamed variables without spaces. Made school-age part time calculation easier to identify. Checked values. 
+
+## Load Necessary Packages
+
+```{r setup, include=FALSE}
+state <- "georgia"
+state_abbrev <- "GA"
+state_abbrev_lowercase <- "ga"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+# Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(readr)
+
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+ 
+#dir.create(output_path, showWarnings = FALSE)  # Create output directory if not present
+
+```
+
+## Notes for further adjustment
+
+Define base CPI Define raw data reported rate (daily, monthly, annual)
+
+## State specific data
+
+```{r notes}
+#Correct landing page
+#CCDF landing page = https://www.decal.ga.gov/bfts/ResearchMarketRates.aspx
+
+#raw_data
+table_1 <- file.path(base_path_processed, "Table 1.xlsx")
+table_2 <- file.path(base_path_processed, "Table 2.xlsx")
+table_3 <- file.path(base_path_processed, "Table 3.xlsx")
+table_4 <- file.path(base_path_processed, "Table 4.xlsx")
+table_5 <- file.path(base_path_processed, "Table 5.xlsx")
+table_6 <- file.path(base_path_processed, "Table 6.xlsx")
+table_key <- file.path(base_path_processed, "Table_key.xlsx")
+
+#state_path <- 'G:/Shared Drives/CWW Team Drive/SSS/All States/GA/GA 2025/'
+state_geographies <- file.path(reference_path, "state_geo_list", "GA_geographies.csv")
+
+#There are no indications of changes to county assignments from the 2021 survey to the 2024 survey. 2021 survey included a map, and discussion of counties whose designations have changed. The absence of similar sections in the 2024 supports the same zone to county assignments for GA. 
+region_to_county <- file.path(base_path_processed,"GA_region_county.xlsx")
+region_to_county <- read_excel(region_to_county)
+region_checked_by <- ""
+
+#Survey inputs
+#citation <- "Schroeder, D., Marra, L. & Faulkner, M. (2024). Georgia Child Care Market Rate Data 2023
+accessed_date <- 10/22/2024
+accessed_by <- "Sbr"
+calculations_by <- "Sbr"
+checked_by <- "Bso"
+
+#"For this analysis, the Georgia Department of Early Care and Learning (DECAL) provided contractor Care Solutions, Inc. Excel spreadsheets with provider information as of October 2023 with a total of 4,425 child care learning center and family child care learning home records, 3,435 of which (78%) had rates that were confirmed or updated in 2023." 
+survey_start_month <- " "
+survey_start_yr <- " "
+survey_end_month <- "October"
+survey_end_year <- "2023"
+print(survey_CPI_month <- "October")
+print(survey_CPI_year <- "2023")
+
+#state age definitions
+##0-11 months = infant = .33
+##12 - 17 months = infant = .166667
+##18 - 23 months = infant = .166667
+##2 years = infant = .33
+## 3 years = preschooler = .33
+## 4 years = preschooler = .33
+## 5 years preschooler = .33
+##6 - 13 years = school-age = 1.0
+
+#Missing Data: No homes reported rates for 5 year olds. Preschool was taken as an average of 3 and 4 years olds for home sites, with the edits made manually in the code below.
+
+infant_0_11_months <- .33
+infant_12_23_months <- .33
+infant_24_35_months <- .33
+preschooler_3years <- .33
+preschooler_4years <- .33
+preschooler_5years <- .33
+school_age <- 1
+
+#All rates are reported as weekly, full-time. 
+#convert weekly to monthly
+#daily_monthly <- 5*(52/12)
+#weekly_monthly <- 4.33
+monthly_conversion <- 4.33
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+
+```{r cleanup}
+
+# Load the Excel file
+table_1 <- read_excel(table_1) 
+table_2 <- read_excel(table_2) 
+table_3 <- read_excel(table_3) 
+table_4 <- read_excel(table_4) 
+table_5 <- read_excel(table_5) 
+table_6 <- read_excel(table_6) 
+table_key <- read_excel(table_key)
+
+# Rename columns for clarity (optional but helpful)
+# Later - pursue code bringing the entries for the 1st row entries up as the column names
+# Later - pursue code to rename the columns of all 6 tables as once
+colnames(table_1) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+colnames(table_2) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+colnames(table_3) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+colnames(table_4) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+colnames(table_5) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+colnames(table_6) <- c("rate_type", "n", "mean", "std_deviation", "minimum", "maximum", "25th_Percentile", 
+                  "50th_Percentile", "75th_Percentile")
+
+table_1a <- table_1 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile")
+table_2a <- table_2 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile")
+table_3a <- table_3 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile")
+table_4a <- table_4 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile")
+table_5a <- table_5 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile")
+table_6a <- table_6 %>%
+select(-"n", -"mean", -"std_deviation", -"minimum", -"maximum", -"25th_Percentile", -"50th_Percentile") 
+
+#Drop CAPS rows and quality rating rows from all tables
+table_1b <- table_1a[-(11:23),]
+table_2b <- table_2a[-(11:23),]
+table_3b <- table_3a[-(11:23),]
+table_4b <- table_4a[-(11:23),]
+table_5b <- table_5a[-(11:23),]
+table_6b <- table_6a[-(11:23),]
+#Drop first 3 rows with header info from all tables
+table_1c <- table_1b[-(1:3),]
+table_2c <- table_2b[-(1:3),]
+table_3c <- table_3b[-(1:3),]
+table_4c <- table_4b[-(1:3),]
+table_5c <- table_5b[-(1:3),]
+table_6c <- table_6b[-(1:3),]
+
+```
+
+#Confirm transformations, delete extra dataframes
+
+```{r confirm transformation}
+
+table_1 <- table_1c
+table_2 <- table_2c
+table_3 <- table_3c
+table_4 <- table_4c
+table_5 <- table_5c
+table_6 <- table_6c
+
+rm(table_1a, table_1b, table_1c, table_2a, table_2b, table_2c, table_3a, table_3b, table_3c, table_4a, table_4b, table_4c, table_5a, table_5b, table_5c, table_6a, table_6b, table_6c)
+
+```
+# Convert to wide format
+```{r}
+
+### Since the tables are separated nicely and neatly, changes are being made to indicate facility type and zone using a key. 
+# However, since I am operating without internet and ChatGPT to solve dumb syntax issues, for now I will enter it semi-manually. 
+# Later - insert code to use the table_key to populate the correct facility and zone
+# Add column indicating facility. Populate tables 1-3 with "center", 4-6 "home" 
+
+
+# Convert to wide format, bring the facility out of the column into the row
+for (table_num in 1:6) {
+  # Construct the table name
+  table_name <- paste0("table_", table_num)
+  
+  # Check if the table exists in the global environment
+  if (exists(table_name)) {
+    # Get the table
+    df <- get(table_name)
+    
+    # Convert to wide format
+    df <- df %>%
+      pivot_wider(
+        names_from = "rate_type",
+        values_from = c("75th_Percentile")
+      )
+    
+    # Save the modified table back to the global environment
+    assign(table_name, df)
+    
+    # Print confirmation
+    message(paste("Converted", table_name, "to wide format."))
+  } else {
+    message(paste("Table", table_name, "does not exist in the global environment."))
+  }
+}
+```
+
+
+#Write a function to rename variables in a clean way
+```{r function clean}
+
+clean_column_names <- function(df) {
+  df %>%
+    rename_with(~ gsub("\\s+$", "", .x) %>%    # Remove trailing spaces
+                  gsub(" ", "_", .) %>%        # Replace spaces with _
+                  tolower() %>%                # Convert to lowercase
+                  gsub("-", "_", .))          # Convert - to _
+}
+
+table_1 <- clean_column_names(table_1)
+table_2 <- clean_column_names(table_2)
+table_3 <- clean_column_names(table_3)
+table_4 <- clean_column_names(table_4)
+table_5 <- clean_column_names(table_5)
+table_6 <- clean_column_names(table_6)
+
+
+
+```
+
+## Create school-age part time values
+```{r}
+
+
+parttime_values <- function(df) {
+  df %>%
+    mutate(
+    school_age_rate = as.numeric(`school_age_rate`), # Convert to numeric if needed
+    school_part_rate = school_age_rate * parttime_conversion
+  )
+}
+
+table_1 <- parttime_values(table_1)
+table_2 <- parttime_values(table_2)
+table_3 <- parttime_values(table_3)
+table_4 <- parttime_values(table_4)
+table_5 <- parttime_values(table_5)
+table_6 <- parttime_values(table_6)
+
+```
+
+
+## Convert data into SSS age categories - center only. Home done in next chunk to account for missing data for 5 year olds. Combine schoolage part and full time care (weighted)
+
+```{r convert to SSS ages}
+#Weight ages to fit into SSS age classifications: 
+# Loop through Tables 1 to 3 - Center 
+for (table_num in 1:3) {
+  # Construct the table name as a string, e.g., "Table_22"
+  table_name <- paste0("table_", table_num)
+  
+  # Check if the table exists in the global environment
+  if (exists(table_name)) {
+    # Retrieve the table from the global environment
+    df <- get(table_name)
+    
+    # Ensure all relevant columns are numeric
+    df[] <- lapply(df, function(x) as.numeric(as.character(x)))
+    
+
+# Now create the SSS age categories, by weighting rates by proportion of age group
+df <- df %>%
+      mutate(
+        infant = (infant_0_11_months * `under_1_year_rate`) +
+                      (infant_12_23_months * `1_year_old_rate`) +
+                      (infant_24_35_months * `2_year_old_rate`),
+        preschooler = (preschooler_3years * `3_year_old_rate`) +
+                           (preschooler_4years * `4_year_old_rate`) +
+                           (preschooler_5years * `5_year_old_rate`),
+        schoolage_full = school_age * `school_age_rate`,
+        schoolage_part = school_age * `school_part_rate`,
+        school_age = (before_after_school_care * schoolage_part) + (full_time_care * schoolage_full)
+      )
+
+
+#Drop month and year specific columns, leaving only SSS age categories
+df <- df %>%
+  select(-`under_1_year_rate`, -`1_year_old_rate`, -`2_year_old_rate`, 
+         -`3_year_old_rate`, -`4_year_old_rate`, -`5_year_old_rate`, -`school_age_rate`, -`schoolage_part`, -`schoolage_full`, -`school_part_rate`)
+
+ # Save the modified table back to the global environment
+    assign(table_name, df)
+    
+    # Print confirmation
+    message(paste("Table:", table_name, "| Calculations added and columns dropped"))
+  } else {
+    message(paste("Table", table_name, "does not exist in the global environment"))
+  }
+}
+```
+
+##Same as above for home tables. Combine schoolage part and full time care (weighted)
+```{r convert to SSS ages}
+#Weight ages to fit into SSS age classifications: 
+# Loop through Tables 1 to 6
+for (table_num in 4:6) {
+  # Construct the table name as a string, e.g., "Table_22"
+  table_name <- paste0("table_", table_num)
+  
+  # Check if the table exists in the global environment
+  if (exists(table_name)) {
+    # Retrieve the table from the global environment
+    df <- get(table_name)
+    
+    # Ensure all relevant columns are numeric
+    df[] <- lapply(df, function(x) as.numeric(as.character(x)))
+    
+
+# Now create the SSS age categories
+df <- df %>%
+      mutate(
+        infant = (infant_0_11_months * `under_1_year_rate`) +
+                      (infant_12_23_months * `1_year_old_rate`) +
+                      (infant_24_35_months * `2_year_old_rate`),
+        preschooler = (.5 * `3_year_old_rate`) + (.5 * `4_year_old_rate`),
+        schoolage_full = school_age * `school_age_rate`,
+        schoolage_part = school_age * `school_part_rate`,
+        school_age = (before_after_school_care * schoolage_part) + (full_time_care * schoolage_full)
+      )
+
+
+#Drop month and year specific columns, leaving only SSS age categories
+df <- df %>%
+  select(-`under_1_year_rate`, -`1_year_old_rate`, -`2_year_old_rate`, 
+         -`3_year_old_rate`, -`4_year_old_rate`, -`5_year_old_rate`, -`school_age_rate`, -`schoolage_part`, -`schoolage_full`, -`school_part_rate`)
+
+ # Save the modified table back to the global environment
+    assign(table_name, df)
+    
+    # Print confirmation
+    message(paste("Table:", table_name, "| Calculations added and columns dropped"))
+  } else {
+    message(paste("Table", table_name, "does not exist in the global environment"))
+  }
+}
+```
+
+#Add suffixes to label home vs. center
+
+```{r }
+#Add suffixes from the table of contents to each Table. Instead of 75th percentile, if the ToC tables says Table 22 is by Cost Area 
+#and center, then I can add cost area and center to 75th percentile to differentiate. This is done in two steps
+
+#Add facility suffix
+# Loop through Tables 1 to 6
+for (table_num in 1:6) {
+  # Construct the table name as a string, e.g., "Table_22"
+  table_name <- paste0("table_", table_num)
+  
+  # Filter `ToC` for the current table number and retrieve the suffix from 'age_group'
+  suffix <- table_key %>%
+    filter(table_number == table_num) %>%  # Use the correct column name `table_number`
+    slice(1) %>%                          # Select only the first matching row
+    pull(facility_type)                       # Pull the value from 'age_group'
+  
+  # Check if we found exactly one unique suffix
+  if (length(suffix) == 1 && !is.na(suffix)) {
+    # Check if the table exists in the global environment
+    if (exists(table_name)) {
+      # Get the table from the global environment
+      df <- get(table_name)
+      
+       # Create new column names for all columns
+      new_col_names <- paste0(colnames(df), "_", suffix)
+      
+      # Rename all columns
+      colnames(df) <- new_col_names
+      
+      # Save the modified table back to the global environment
+      assign(table_name, df)
+      
+      # Print to check that it's working
+      message(paste("Table:", table_name, "| Suffix found:", suffix))
+    } else {
+      message(paste("Table", table_name, "does not exist in the global environment"))
+    }
+  } else {
+    message(paste("No unique suffix found in ToC for Table", table_name))
+  }
+}
+
+```
+
+#Join center and home tables by region. Calculate the SSS ages of center and home separately first before joining by region to do the final facility weights. 
+
+```{r}
+
+#Add column indicating zone. Tables 1, 4 are zone 1, 2, 5 are zone 2, and 3 and 6 are zone 3. 
+table_1$region <- 1
+table_4$region <- 1
+table_2$region <- 2
+table_5$region <- 2
+table_3$region <- 3
+table_6$region <- 3
+
+#Join tables by region
+# Make a more concise, automatic code using the table_key for this later. 
+region_1 <- table_1 %>%
+  left_join(table_4, by = "region")
+region_2 <- table_2 %>%
+  left_join(table_5, by = "region")
+region_3 <- table_3 %>%
+  left_join(table_6, by = "region")
+
+
+#First, ensure that they are numeric
+region_3 <- region_3 %>%
+  mutate(across(everything(), ~ as.numeric(as.character(.))))
+
+# Check the structure to confirm
+str(region_3)
+
+```
+# Apply facility weights 
+```{r}
+#Facility ratios
+
+# Define regions (assumes regions are named as df_region_1, df_region_2, etc.)
+region_numbers <- 1:3
+
+# Loop through each region
+for (region_num in region_numbers) {
+  # Construct the region dataframe name as a string, e.g., "df_region_1"
+  region_name <- paste0("region_", region_num)
+  
+  # Check if the regional dataframe exists in the global environment
+  if (exists(region_name)) {
+    # Retrieve the dataframe from the global environment
+    df <- get(region_name)
+    
+    # Ensure all relevant columns are numeric
+    df[] <- lapply(df, function(x) if(is.character(x) || is.factor(x)) as.numeric(as.character(x)) else x)
+    
+      # Apply calculations
+      df <- df %>%
+        mutate(
+          infant = (infant_center_weight * infant_Center) +
+                   (infant_home_weight * infant_Home),
+          preschooler = (preschooler_center_weight * preschooler_Center) +
+                        (preschooler_home_weight * preschooler_Home),
+          school_age = (school_center_weight * school_age_Center) +
+                       (school_home_weight * school_age_Home)
+        )
+      
+    #Drop facility specific columns, leaving only SSS age categories
+    df <- df %>%
+  select(-`infant_Center`, -`preschooler_Center`, -`school_age_Center`, 
+         -`infant_Home`, -`preschooler_Home`, -`school_age_Home`)
+    
+      # Save the modified dataframe back to the global environment
+      assign(region_name, df)
+      
+      # Print confirmation
+      message(paste("Region:", region_name, "| Costs weighted by facility ratios applied"))
+    } else {
+    # If the region dataframe does not exist
+    message(paste("Region", region_name, "does not exist in the global environment"))
+  }
+}
+```
+## Convert to monthly costs
+
+```{r monthly conversion}
+#Facility ratios
+
+# Define regions (assumes regions are named as df_region_1, df_region_2, etc.)
+region_numbers <- 1:3
+
+# Loop through each region
+for (region_num in region_numbers) {
+  # Construct the region dataframe name as a string, e.g., "df_region_1"
+  region_name <- paste0("region_", region_num)
+  
+  # Check if the regional dataframe exists in the global environment
+  if (exists(region_name)) {
+    # Retrieve the dataframe from the global environment
+    df <- get(region_name)
+    
+    # Ensure all relevant columns are numeric
+    df[] <- lapply(df, function(x) if(is.character(x) || is.factor(x)) as.numeric(as.character(x)) else x)
+    
+#Apply calculations
+    df <- df %>%
+      mutate(
+        infant = (monthly_conversion * infant),
+        preschooler = (monthly_conversion * preschooler), 
+        school_age = (monthly_conversion * school_age)
+      )
+    
+      # Save the modified dataframe back to the global environment
+      assign(region_name, df)
+      
+      # Print confirmation
+      message(paste("Region:", region_name, "| Costs weighted by facility ratios applied"))
+    } else {
+    # If the region dataframe does not exist
+    message(paste("Region", region_name, "does not exist in the global environment"))
+  }
+}
+```
+
+## Combine into one dataframe
+
+```{r combine}
+# Combine all region dataframes into one
+combined_regions <- bind_rows(region_1, region_2, region_3, .id = "region_id")
+
+# View the combined dataframe
+print(combined_regions)
+
+```
+
+## Assign regions to their counties, and county fips codes.
+
+```{r assign regions to counties}
+
+GA25_county_costs <- region_to_county %>%
+  mutate(region = as.numeric(region)) %>% # Convert region to numeric
+  left_join(combined_regions, by = "region")
+
+#Drop the extra columns
+GA25_county_costs <- GA25_county_costs %>%
+  select(-"Zone", -"region", -"region_id")
+
+# Generate the final input of county with FIPS and costs 
+# Bring in the county
+county_list <- read_csv(state_geographies)
+
+final_result <- county_list %>%
+  left_join(GA25_county_costs, by = c("countyname" = "County"))
+```
+
+
+#Test for missing values
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+```
+
+```{r}
+
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+
+```

@@ -1,0 +1,528 @@
+---
+title: "MA Child Care 2025"
+author: "Brian Son"
+date: "2025-01-06"
+last modified: "2025-01-17"
+last editor: "Sbr"
+---
+
+##Instructions:##
+- Update file paths and variables as needed by state
+
+## Editing history
+# 2/5/2025 - Noted absence of school-age part time costs. Created that variable. 
+#1/17/2025 - Standardize file output, tests, etc. 
+#1/15/2025 - Edits made to filepaths for movement to the new directory made by Bso. 
+#2/12/2025 - resaved inputs for group and home care (were previously saved as the opposite), revised the regional match, including the input for the region key, standardized data for monthly, rather than daily as reported
+
+
+
+## Load Necessary Packages, Define File Paths
+
+```{r setup, include=FALSE}
+
+state <- "massachusetts"
+state_abbrev <- "MA"
+state_abbrev_lowercase <- "ma"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+# Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(readr)
+
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+ 
+#dir.create(output_path, showWarnings = FALSE)  # Create output directory if not present
+
+
+```
+
+## Notes for further adjustment
+
+Define base CPI Define raw data reported rate (daily, monthly, annual)
+
+## State specific data
+############################# Create full citation
+```{r notes}
+#CCDF_landing_page <- "https://www.mass.gov/"
+
+raw_data_source <- file.path(base_path_raw, "MA 2022 Market Rate Survey and Narrow Cost Analysis.pdf")
+family_care_data <- file.path(base_path_processed, "FCC.xlsx") #Tables 5-8
+group_care_data <- file.path(base_path_processed, "group and school child care.xlsx") #Tables 9-12
+
+#Region map has not changed from 2018 MRS, which had a comprehensive list
+#region_source <- "G:\Shared drives\CWW Team Drive\SSS\All States\MA\MA 2021\Data Collection\Child Care\2018_MA_MRS.pdf"
+region_county_list <- file.path(base_path_processed, "Regions Map.xlsx")
+state_geographies <- file.path(reference_path, "state_geo_list", "MA_geographies.csv")
+region_checked_by <- "Sbr"
+###########################################################Validator, check region to county
+
+#Survey inputs
+#citation <- "Massachusetts Department of Early Education and Care (2022). "Massachusetts 2022 Market Rate Survey and Narrow Cost Analysis. https://www.mass.gov/doc/massachusetts-2022-market-rate-survey-and-narrow-cost-analysis-final-report/download" (accessed January 6, 2025)
+accessed_date <- 1/6/2025
+accessed_by <- "Bso"
+calculations_by <- "Bso"
+checked_by <- "SBr"
+
+#"In total, 7,330 providers were included in the primary dataset, each with one to four "observations," or rates for a specific age group (infant, toddler, preschool or school age). After cleaning procedures, 4,237 providers remained in the final primary datset used for analysis.
+survey_start_month <- "April"
+survey_start_yr <- "2022"
+survey_end_month <- "June"
+survey_end_year <- "2022"
+base_cpi_month <- "May"
+base_cpi_year <- "2022"
+cpi_checker <- "Sbr"
+###########################################################Validator, check cpi
+
+# State age definitions
+#"Age Groups (4) – The age group division reflects how ages are categorized in licensing regulations and the subsidy system. The groups are: Infants (under 15 months), Toddlers (15-33 months), Preschool (33 months to kindergarten age), and School Aged Children (kindergarten age and up). Costs from the overall model program budget were allocated to each age group to determine cost by age group." Page 21. The same age breakdowns were performed for 2022 SSS data. MA has a history of considering preschool to being a 33 months. 
+infant_0_15_months_ratio <- (1/2)
+toddler_15_33_months_ratio <- (1/2)
+preschooler_33_60_months_ratio <- (1)
+school_age_ratio <- (1)
+age_checker <- "Sbr"
+###########################################################Validater, check state ages
+
+#Table B1: Rate Conversion Calculations (for MA)
+#"Conversion Methodology
+#Hourly Full-Time = (Hourly Rate) X 8
+#Daily Full-Timw = No conversion
+#Weekly Full Time = (Weekly Rate) / 5
+#Monthly Full Time = (Monthly Rate) / 4.33 / 5
+
+reported_rate <- "daily"
+#convert daily rates to monthly
+monthly_conversion <- 5*(52/12)
+#weekly_monthly <- 4.33
+#hourly_monthly <- ___*5*(52/12)
+#daily_monthly <- 5*(52/12)
+rates_checker <- "Sbr"
+###########################################################Validator, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+
+```{r cleanup}
+# Cleanup the dataset for Group and School Care
+gsc_data <- read_excel(group_care_data, sheet = 1)
+
+# Remove columns 2 to 4 to isolate 75th percentile
+gsc_data_cleaned <- gsc_data %>% select(-c(2:4))
+
+# Explicitly name the second column as "Infant 75th Percentile"
+colnames(gsc_data_cleaned)[2] <- "Infant 75th Percentile"
+
+# Add new columns: "Toddler 75th Percentile", "Preschool 75th Percentile", and "School-Age 75th Percentile"
+gsc_data_final <- gsc_data_cleaned %>%
+  mutate(
+    `Toddler 75th Percentile` = NA,
+    `Preschool 75th Percentile` = NA,
+    `School-Age 75th Percentile` = NA
+  )
+
+# Duplicate values from "Infant 75th Percentile" to the new columns
+gsc_data_final$`Toddler 75th Percentile`[1:6] <- gsc_data_final$`Infant 75th Percentile`[9:14]
+gsc_data_final$`Preschool 75th Percentile`[1:6] <- gsc_data_final$`Infant 75th Percentile`[17:22]
+gsc_data_final$`School-Age 75th Percentile`[1:6] <- gsc_data_final$`Infant 75th Percentile`[25:30]
+
+# Remove all rows under 6
+gsc_final <- gsc_data_final[1:6, ]
+
+#Remove extra dataframes
+rm(gsc_data, gsc_data_cleaned, gsc_data_final)
+
+
+## Cleanup the dataset for FCC##
+fcc_data <- read_excel(family_care_data, sheet = 1)
+
+# Remove columns 2 to 4
+fcc_data_cleaned <- fcc_data %>% select(-c(2:4))
+
+# Explicitly name the second column as "Infant 75th Percentile"
+colnames(fcc_data_cleaned)[2] <- "Infant 75th Percentile"
+
+# Add new columns: "Toddler 75th Percentile", "Preschool 75th Percentile", and "School-Age 75th Percentile"
+fcc_data_final <- fcc_data_cleaned %>%
+  mutate(
+    `Toddler 75th Percentile` = NA,
+    `Preschool 75th Percentile` = NA,
+    `School-Age 75th Percentile` = NA
+  )
+
+# Duplicate values from "Infant 75th Percentile" to the new columns
+fcc_data_final$`Toddler 75th Percentile`[1:6] <- fcc_data_final$`Infant 75th Percentile`[9:14]
+fcc_data_final$`Preschool 75th Percentile`[1:6] <- fcc_data_final$`Infant 75th Percentile`[17:22]
+fcc_data_final$`School-Age 75th Percentile`[1:6] <- fcc_data_final$`Infant 75th Percentile`[25:30]
+
+# Remove all rows under 6
+fcc_final <- fcc_data_final[1:6, ]
+
+#Remove extra dataframes
+rm(fcc_data, fcc_data_cleaned, fcc_data_final)
+```
+
+## Create SSS Ages
+
+```{r Create SSS Ages categories to both group and school care and family care}
+#
+# Define a function to process the dataframe
+process_dataframe <- function(df) {
+  # Ensure the columns are numeric
+  df$`Infant 75th Percentile` <- as.numeric(df$`Infant 75th Percentile`)
+  df$`Toddler 75th Percentile` <- as.numeric(df$`Toddler 75th Percentile`)
+  
+  # Multiply by ratios in respective columns
+  df$`Infant 75th Percentile` <- df$`Infant 75th Percentile` * infant_0_15_months_ratio
+  df$`Toddler 75th Percentile` <- df$`Toddler 75th Percentile` * toddler_15_33_months_ratio
+  
+  # Create the "infant" column as the sum of the two adjusted columns
+  df <- df %>%
+    mutate(infant = `Infant 75th Percentile` + `Toddler 75th Percentile`)
+  
+  # Remove the original columns
+  df <- df %>% select(-c(`Infant 75th Percentile`, `Toddler 75th Percentile`))
+  
+  # Rename the other columns
+  df <- df %>%
+    rename(
+      preschooler = `Preschool 75th Percentile`,
+      schoolage_full_time = `School-Age 75th Percentile`
+    )
+  
+  # Move the "infant" column to the right of the "Region" column
+  cols <- colnames(df)
+  infant_index <- which(cols == "infant")
+  region_index <- which(cols == "Region")
+  if (length(region_index) > 0 && length(infant_index) > 0) {
+    cols <- append(cols[-infant_index], "infant", after = region_index)
+    df <- df[, cols]
+  }
+  
+  return(df)
+}
+
+# Apply the function to both dataframes
+fcc_ages <- process_dataframe(fcc_final)
+gsc_ages <- process_dataframe(gsc_final)
+```
+
+## Create school-age part time values
+
+```{r}
+
+rm(fcc_final, gsc_final)
+
+# Define a function to create school-age part time rates across dfs
+schoolage_parttime_function <- function(df) {
+  # Ensure the columns are numeric
+  df$`schoolage_full_time` <- as.numeric(df$`schoolage_full_time`)
+  
+  # Create the "schoolage_part_time" column as a fraction of the schoolage_full_time
+  df <- df %>%
+    mutate(`schoolage_part_time` = `schoolage_full_time` * parttime_conversion)
+  
+  return(df)
+}
+
+# Apply the function to both dataframes
+fcc_ages_sa <- schoolage_parttime_function(fcc_ages)
+gsc_ages_sa <- schoolage_parttime_function(gsc_ages)
+```
+
+## Create school-age values
+```{r}
+rm(fcc_ages, gsc_ages)
+
+#Define a function to create school-age values from full time and part time rates
+schoolage_function <- function(df) {
+  df <- df %>%
+    mutate(`school_age` = (`schoolage_part_time` * before_after_school_care) + (`schoolage_full_time` * full_time_care))
+
+  # Remove the original columns
+  df <- df %>% select(-c(`schoolage_full_time`, `schoolage_part_time`))  
+   
+  return(df)
+}
+
+# Apply the function to both dataframes
+fcc_ages_final <- schoolage_function(fcc_ages_sa)
+gsc_ages_final <- schoolage_function(gsc_ages_sa)
+
+```
+
+## Confirm transformation, rename dfs, remove extra dfs
+```{r}
+fcc_ages <- fcc_ages_final
+gsc_ages <- gsc_ages_final
+
+```
+
+
+## Facility Weight Conversion for both gs care and family care
+
+```{r Calculate the facility weights for group school care and family care before combining the dataframes together}
+# Ensure the necessary columns are numeric for family care data frame
+fcc_ages$infant <- as.numeric(fcc_ages$infant)
+fcc_ages$preschooler <- as.numeric(fcc_ages$preschooler)
+fcc_ages$school_age <- as.numeric(fcc_ages$school_age)
+
+
+# Multiply the columns by the respective weights
+fcc_weighted <- fcc_ages %>%
+  mutate(
+    infant = infant * infant_home_weight,
+    preschooler = preschooler * preschooler_home_weight,
+    school_age = school_age * school_home_weight
+  )
+
+# Ensure the necessary columns are numeric for group and school care data frame
+gsc_ages$infant <- as.numeric(gsc_ages$infant)
+gsc_ages$preschooler <- as.numeric(gsc_ages$preschooler)
+gsc_ages$school_age <- as.numeric(gsc_ages$school_age)
+
+# Multiply the columns by the respective weights
+gsc_weighted <- gsc_ages %>%
+  mutate(
+    infant = infant * infant_center_weight,
+    preschooler = preschooler * preschooler_center_weight,
+    school_age = school_age * school_center_weight
+  )
+
+# Combine the two dataframes
+combined_df <- bind_rows(fcc_weighted, gsc_weighted)
+
+# Group by "Region" and sum the values of "infant", "preschooler", and "schoolage"
+summed_df <- combined_df %>%
+  group_by(Region) %>%
+  summarise(
+    infant = sum(infant, na.rm = TRUE),
+    preschooler = sum(preschooler, na.rm = TRUE),
+    school_age = sum(school_age, na.rm = TRUE)
+  )
+
+# Rename "Region" values and had to manually code in Region 6- Metro Boston in the code because it would not change names
+summed_df <- summed_df %>%
+  mutate(
+    Region = case_when(
+      Region == "Region 1- Western" ~ "Region 1",
+      Region == "Region 2- Central" ~ "Region 2",
+      Region == "Region 3- Northeast" ~ "Region 3",
+      Region == "Region 4- Metro" ~ "Region 4",
+      Region == "Region 5- Southeast" ~ "Region 5",
+      Region == "Region 6- Metro Boston" ~ "Region 6",
+      TRUE ~ Region  # Keep any other region names unchanged
+    )
+  )
+
+# Ensure row 6's region is named "Region 6" (if necessary)
+summed_df$Region[6] <- "Region 6"
+
+# Reorder the columns if needed
+final_data <- summed_df %>%
+  select(Region, infant, preschooler, school_age)
+
+```
+# convert daily values to monthly values 
+```{r convert daily values to monthly values}
+final_data <- final_data %>%
+  mutate(
+    infant = infant * monthly_conversion,
+    preschooler = preschooler * monthly_conversion,
+    school_age = school_age * monthly_conversion
+  )
+```
+
+#clean up counties files before joinning the combined final data to counties
+
+```{r Cleaning up county data frame to populate data and join and then join into the geo state data frame}
+# Join the datasets
+location_to_county <- read_excel(region_county_list, sheet = 5)
+
+```
+
+# Joinning the combined final data to counties
+
+```{r Joining final data to counties THEN joining to STATE GEO}
+
+final_result <- final_data %>%
+  left_join(location_to_county, by = "Region")
+
+# Remove the "Region" column
+final_result <- final_result %>%
+  select(-Region)
+
+# Reorder the columns to "countyname", "infant", "preschooler", and "schoolage"
+MA2025 <- final_result %>%
+  select(`County Data`, infant, preschooler, school_age)
+
+# Rename the column "countyname" to "county_town_name"
+MA2025 <- MA2025 %>%
+  rename(county_town_name = `County Data`)
+
+# Assign regions to their counties
+state_geographies <- read_csv(state_geographies)
+
+# Join the two datasets by "county_town_name"
+MA2025 <- state_geographies %>%
+  left_join(MA2025, by = "county_town_name")
+
+
+## LOOK AT PREVIOUS MARKET RATE SURVEY FOR PREVIOUS TOWN NAMES ##
+any(is.na(MA2025$infant))
+any(is.na(MA2025$preschooler))
+any(is.na(MA2025$school_age))
+```
+
+#Test for missing values and resolve
+```{r test data}
+# filter MA2025 for missing values
+missing_values <- MA2025 %>%
+  filter(is.na(infant) | is.na(preschooler) | is.na(school_age))
+
+# check the count of obs in missing_values dataframe
+nrow(missing_values)
+
+# filter final_result for County Data values that contain any of the following names:
+final_data_filtered_missing_values <- final_result %>%
+  filter( `County Data` == "North Attleborough town" | `County Data` == "Greenfield Town city" | `County Data` == "Amherst town" | `County Data` == "Framingham town" | `County Data` == "Randolph town" | `County Data` == "Bridgewater town")
+
+# manually change the names of the towns to match correctly with the state_geographies dataframe
+final_result <- final_result %>%
+  mutate(`County Data` = case_when(
+    `County Data` == "North Attleborough town" ~ "North Attleborough Town city",
+    `County Data` == "Greenfield Town city" ~ "Greenfield city",
+    `County Data` == "Amherst town" ~ "Amherst Town city",
+    `County Data` == "Framingham town" ~ "Framingham city",
+    `County Data` == "Randolph town" ~ "Randolph city",
+    `County Data` == "Bridgewater town" ~ "Bridgewater city",
+    TRUE ~ `County Data`  # Keep other values unchanged
+  ))
+
+
+# now rerun the join and check for missing values
+
+# Reorder the columns to "countyname", "infant", "preschooler", and "schoolage"
+MA2025 <- final_result %>%
+  select(`County Data`, infant, preschooler, school_age)
+
+# Rename the column "countyname" to "county_town_name"
+MA2025 <- MA2025 %>%
+  rename(county_town_name = `County Data`)
+
+# Join the two datasets by "county_town_name"
+MA2025 <- state_geographies %>%
+  left_join(MA2025, by = "county_town_name")
+
+# filter MA2025 for missing values
+missing_values <- MA2025 %>%
+  filter(is.na(infant) | is.na(preschooler) | is.na(school_age))
+
+# check the count of obs in missing_values dataframe
+nrow(missing_values)
+
+```
+
+#Save file
+```{r}
+
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(MA2025, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+
+```

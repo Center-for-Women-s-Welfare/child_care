@@ -1,0 +1,812 @@
+---
+title: "TN_Child_Care"
+script purpose: Script calculates TN 2025 child care costs
+author: "Sarah Brolliar"
+date: "2024-11-04"
+last modified: "2025-01-17"
+last editor: "Sbr"
+---
+
+## Editing history
+#1/29/2025 - Change from TN regions (1 or 2) to assignments by MSA.Use 2024 MSA designations to match the MSA designations listed in the market rate survey. 
+#1/17/2025 - Add validater reminders, change SSS_year in filepath
+#1/16/2025 - Edits made to filepaths for movement to the new directory made by SBr. 
+
+## Load Necessary Packages, Define File Paths
+
+```{r setup, include=FALSE}
+
+state <- "tennessee"
+state_abbrev <- "TN"
+state_abbrev_lowercase <- "tn"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+#Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+
+#Set base paths
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+
+```
+
+## State specific data
+Define base CPI Define raw data reported rate (daily, monthly, annual)
+```{r notes}
+CCDF_landing_page <- "https://digitaltennessee.tnsos.gov/hs_market_rate_surveys/5/"
+
+#raw data
+raw_data_source <- file.path(base_path_raw, "Determining Child Care Market Rates in the State of Tennessee.pdf")
+table_21a <- file.path(base_path_processed, "Table 1.xlsx") #Named 21 to avoid downstream issues #26 counties
+table_22a <- file.path(base_path_processed, "Table 2.xlsx") #Named 22 to avoid downstream issues #69 counties
+table_4a <- file.path(base_path_processed, "Table 4.xlsx") # Chattanooga
+table_5a <- file.path(base_path_processed, "Table 5.xlsx") # Clarksville
+table_6a <- file.path(base_path_processed, "Table 6.xlsx") # Cleveland
+table_7a <- file.path(base_path_processed, "Table 7.xlsx") # Jackson
+table_8a <- file.path(base_path_processed, "Table 8.xlsx") # Johnson City
+table_9a <- file.path(base_path_processed, "Table 9.xlsx") # Kingsport-Bristol
+table_10a <- file.path(base_path_processed, "Table 10.xlsx") # Knoxville
+table_11a <- file.path(base_path_processed, "Table 11.xlsx") # Memphis
+table_23a <- file.path(base_path_processed, "Table 23.xlsx") # Morristown #Yes, this is 23. Error in the MRS 
+table_13a <- file.path(base_path_processed, "Table 13.xlsx") # Nashville
+
+table_key <- data.frame(
+table_number = c("210", "220", "40", "50", "60", "70", "80", "90", "100", "110", "230", "130"),
+region = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"),
+region_name = c("First Market", "Second Market", "Chattanooga", "Clarksville", "Cleveland", "Jackson", "Johnson_City", "Kingsport-Bristol", "Knoxville", "Memphis", "Morristown", "Nashville")
+)
+table_key_validator <- "Aku"
+##########################################################Validator, use the PDF to confirm the table to region names
+
+state_geographies <- file.path(reference_path, "state_geo_list", "TN_geographies.csv")
+region_to_county_key <- file.path(base_path_processed, "TN_county_data_MSAassignments.xlsx")
+region_to_county_key <- read_excel(region_to_county_key)
+region_checked_by <- "Aku"
+###########################################################Validator, check region to county
+  
+#Survey inputs
+citation <- "Emily Pratt (August 2024). Determining Child Care Market Rates in the State of Tennessee. Knoxville, TX: The University of Tennessee Knoxville, Boyd Center for Business & Economic Research" 
+accessed_date <- 11/22/2024
+accessed_by <- "Aku"
+calculations_by <- "Sbr"
+checked_by <- "Aku"
+
+#Survey period
+survey_start_month <- "May"
+survey_start_yr <- "2024"
+survey_end_month <- "June 26"
+survey_end_year <- "2024"
+base_cpi_month <- "June"
+base_cpi_year <- "2024"
+cpi_checker <- "Sbr"
+###########################################################Validator, check cpi
+  
+# state age definitions
+# TN categories are Infant, Toddler, 2 Years Old and Over, and School-age (In and Out of school). 
+#"The School-Age Out category represents rates charged for children who are in Kindergarten through 17 years when school is not in session and care is provided all day. An average weekly rate was computed for School-Age Out using the School Full-Time, School Weekly, and School Monthly divided by 4.33 rates. The School-Age In category represents rates charged for children in Kindergarten through 17 years when school is in session and care is not provided for a full day. The School-Age In weekly rate was determined by averaging the School Before and After, School After, School Daily times 5, and 5-Year Before and After rates."
+#In the 2021 Standard, infants (6 wks - 12 months) and toddlers (13-24 months) were averaged (each weight of .5) to determine the infant cost. 
+#In 2021, the 2 years old and over (24-60 months) represented all preschool costs. The same ratios have been applied. 
+
+infant_0_11_months <- .5
+toddler_12_24_months <- .5
+preschooler_25_months_and_over <- 1
+School_Age_Out <- 1
+School_Age_In <- 1
+age_checker <- "Aku"
+###########################################################Validator, check state ages
+
+#TN has weekly rates
+reported_rate <- "weekly"
+#convert weekly to monthly
+#daily_monthly <- 5*(52/12)
+#weekly_monthly <- 4.33
+monthly_conversion <- 4.33
+rates_checker <- "Aku"
+###########################################################Validator, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Read in tables, apply column labels
+#### Read in the market tables (Table 1, first market, 26 counties, Table 2, second market 69 counties). 
+#### MSA specific tables also included.
+
+```{r cleanup}
+
+#Load the Excel files
+#tables were titled with a zero afterward so as not to interfere with the later splitting of tables. Table 230 is correct. It matches an error in the table naming made in the original publication. 
+table_210 <- read_excel(table_21a)
+table_220 <- read_excel(table_22a)
+table_40 <- read_excel(table_4a)
+table_50 <- read_excel(table_5a)
+table_60 <- read_excel(table_6a)
+table_70 <- read_excel(table_7a)
+table_80 <- read_excel(table_8a)
+table_90 <- read_excel(table_9a)
+table_100 <- read_excel(table_10a)
+table_110 <- read_excel(table_11a)
+table_230 <- read_excel(table_23a)
+table_130 <- read_excel(table_13a)
+
+# List of table names (to avoid manual list creation)
+table_names <- c("table_210", "table_220", "table_40", "table_50", "table_60", 
+                 "table_70", "table_80", "table_90", "table_100", "table_110", 
+                 "table_230", "table_130")
+
+# Convert the table names to a list of dataframes
+tables <- mget(table_names)
+
+new_col_names <- as.character(table_40[1, 2:6])
+
+# Function to update column names
+update_table_columns <- function(df, new_col_names, col_range = 2:6) {
+  colnames(df)[col_range] <- new_col_names  # Update selected columns
+  colnames(df)[1] <- "Facility"
+  colnames(df)[4] <- "Two_years_old_and_over"  # Rename the 4th column
+  return(df)
+}
+
+# Apply the function to all tables
+tables <- lapply(tables, update_table_columns, new_col_names = new_col_names)
+
+# Assign tables back to individual variables in the environment
+list2env(tables, envir = .GlobalEnv)
+```
+#Assign region numbers to each table, using the table_key
+```{r}
+# Loop through the table names in table_list2
+for (table_name in table_names) {
+  # Check if the table exists in the global environment
+  if (exists(table_name)) {
+    # Get the table from the global environment
+    df <- get(table_name)
+    
+    # Extract the numeric part from "table_210" → "210"
+    table_num <- gsub("table_", "", table_name)
+    
+    # Retrieve the region from table_key based on the numeric table_number
+    region <- table_key %>%
+      filter(table_number == table_num) %>%  # Match numeric table_number
+      pull(region)  # Get the region value
+    
+    # Check if a region was found
+    if (length(region) == 1 && !is.na(region)) {
+      # Add the region column to the dataframe
+      df$region <- region
+      
+      # Save the modified table back to the global environment
+      assign(table_name, df)
+      
+      # Print to check that it's working
+      message(paste("Table:", table_name, "| Region added:", region))
+    } else {
+      message(paste("No unique region found in table_key for Table", table_name))
+    }
+  } else {
+    message(paste("Table", table_name, "does not exist in the global environment"))
+  }
+}
+```
+
+## Cleanup the dataset
+#### Each main table has 3 sub-tables: Child Care Centers, Group Homes, and Family Homes. Columns are age brackets. Divide up.
+#### Retain only 75th percentile row.
+#### Create a key to ID facility type to table
+```{r}
+#Define function
+split_and_clean_table <- function(df, row_groups, original_name, rows_to_delete, envir = .GlobalEnv) {
+  # Extract the numeric part of the original name (e.g., "table_40" → "40")
+  original_number <- as.numeric(gsub("table_", "", original_name))
+  
+  # Generate the correct new table names for center, group, and family: "table_40" → "table_41, table_42, table_43"
+  new_names <- paste0("table_", original_number + 1:3)
+
+  # Generate and clean subsets
+  split_tables <- setNames(
+    lapply(seq_along(row_groups), function(i) {
+      subset_df <- df[row_groups[[i]], ]  # Subset rows
+      
+      # Apply row deletions based on predefined rules
+      if (i == 1 && "a" %in% names(rows_to_delete)) {
+        subset_df <- subset_df[-rows_to_delete$a, , drop = FALSE]  # Remove rows for table_41
+      } else if (i == 2 && "b" %in% names(rows_to_delete)) {
+        subset_df <- subset_df[-rows_to_delete$b, , drop = FALSE]  # Remove rows for table_42 
+      } else if (i == 3 && "c" %in% names(rows_to_delete)) 
+        {subset_df <- subset_df[-rows_to_delete$c, , drop = FALSE]  # Remove rows for table_43
+}
+      
+      return(subset_df)
+    }),
+    new_names  # Assign correct names
+  )
+
+  # Assign each cleaned table to the global environment
+  list2env(split_tables, envir = envir)
+}
+
+# Define row ranges
+row_groups <- list(1:10, 11:21, 22:32)
+
+# Define rows to delete (non 75th percentile rows)
+rows_to_delete <- list(
+  a = c(1:5, 7, 9),    # Rows to delete from table_41
+  b = c(1:6, 8, 10),    # Rows to delete from table_42 and table_43
+  c = c(1:6, 9, 11)     #and table_43
+)
+
+# Define list of tables and their corresponding names
+table_list2 <- list(table_210, table_220, table_40, table_50, table_60, table_70, table_80, 
+                    table_90, table_100, table_110, table_130, table_230)
+
+table_names <- c("table_210", "table_220","table_40", "table_50", "table_60", "table_70", "table_80",
+                 "table_90", "table_100", "table_110", "table_130", "table_230")
+
+# Run the function
+#split_and_clean_table(table_40, row_groups, "table_40", rows_to_delete)
+# Use lapply to apply the function to each table
+lapply(seq_along(table_list2), function(i) {
+  split_and_clean_table(table_list2[[i]], row_groups, table_names[i], rows_to_delete)
+})
+
+#Add the correct columns names
+new_col_names <- as.character(table_40[1,2:6])
+
+# Function to update column names
+update_multiple_tables <- function(table_names, new_col_names, col_range = 2:6) {
+  lapply(table_names, function(name) {
+    if (exists(name, envir = .GlobalEnv)) {
+      df <- get(name, envir = .GlobalEnv)  # Retrieve table from global environment
+      colnames(df)[col_range] <- new_col_names  # Update selected columns
+      colnames(df)[4] <- "Two_years_old_and_over"  # Rename the 4th column
+      assign(name, df, envir = .GlobalEnv)  # Assign updated table back
+    }
+  })
+}
+
+```
+#Add suffix denoting facility type. Unable to do it in an elegant way, so used the table_key to get it over and done with. 
+```{r add facility suffic}
+
+#Create table_key_suffix. Ending in 1 is center, ending in 2 is group home, ending in 3 is family home
+table_key_suffix <- data.frame(
+table_number = c("101", "102", "103", "111", "112", "113", "131", "132", "133", "211", "212", "213", "221", "222", "223", "231", "232", "233", "41", "42", "43", "51", "52", "53", "61", "62", "63", "71", "72", "73", "81", "82", "83", "91", "92", "93"),
+facility_type = c("center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home", "center", "group_home", "family_home")
+)
+
+#Add facility suffix
+# Loop through Separated Tables
+for (i in 1:nrow(table_key_suffix)) {
+   # Get the table number and facility type for the current iteration
+  table_num <- table_key_suffix$table_number[i]
+  suffix <- table_key_suffix$facility_type[i]
+  
+  # Construct the table name as a string, e.g., "table_101"
+  table_name <- paste0("table_", table_num)
+  
+  
+   # Check if the table exists in the global environment
+  if (exists(table_name)) {
+    # Get the table from the global environment
+    df <- get(table_name)
+  
+    # Create new column names for all columns (we'll add the suffix to columns 2:6)
+    new_col_names <- colnames(df)
+    new_col_names[2:6] <- paste0(new_col_names[2:6], "_", suffix)
+    
+    # Rename the columns
+    colnames(df) <- new_col_names
+    
+    # Save the modified table back to the global environment
+    assign(table_name, df)
+    
+    # Print to check that it's working
+    message(paste("Table:", table_name, "| Suffix found:", suffix))
+  } else {
+    message(paste("Table", table_name, "does not exist in the global environment"))
+  }
+}
+    
+  
+```
+
+#Print a list of tables where there is an insufficient number of data points to generate costs for the MSA. 
+```{r}
+#Create the list of tables to check
+separated_tables <- mget(c(
+  "table_101", "table_102", "table_103", "table_111", "table_112", "table_113", 
+  "table_131", "table_132", "table_133", "table_211", "table_212", "table_213", 
+  "table_221", "table_222", "table_223", "table_231", "table_232", "table_233", 
+  "table_41", "table_42", "table_43", "table_51", "table_52", "table_53", 
+  "table_61", "table_62", "table_63", "table_71", "table_72", "table_73", 
+  "table_81", "table_82", "table_83", "table_91", "table_92", "table_93"
+))
+
+
+# Create a vector to store table names where the condition is met
+tables_with_condition <- vector()
+
+# Loop through all tables and check the condition
+for (name in names(separated_tables)) {
+  df <- separated_tables[[name]]
+  
+  # Ensure df has at least 3 rows and 2 columns before checking the value
+  if (nrow(df) >= 3 && ncol(df) >= 2) {
+    value <- as.numeric(df[3, 2])  # Convert to numeric
+    
+    print(paste("Table:", name, "| Row 3, Col 2 Value:", value))  # Debugging print
+    
+    if (is.na(value) || value < 6) {
+      tables_with_condition <- c(tables_with_condition, name)
+    }
+  } else {
+    print(paste("Table:", name, "| Skipped due to insufficient rows/columns"))
+  }
+}
+
+# Print tables that meet the condition
+tables_with_condition
+
+```
+# Drop rows 2 and 3 (showing the number of responses by age group and in total) of all the tables. Retain only the 75th percentile row. 
+```{r Drop rows 2 and 3}
+separated_tables <- lapply(separated_tables, function(df) df[-c(2, 3), ])
+list2env(separated_tables, envir = .GlobalEnv)
+
+```
+
+##Review list above. All values print to show how many responses were given per MSA (ending in 1=center, 2 = group, 3=family) DO NOT REMOVE anything starting with 21X or 22X. They represent First and Second Market. The response number was cut off in 213, 223. Rather than waste time rewriting the code, just don't delete them. 
+# Remove tables that do not meet the criteria. (<6) Which tables to be deleted are entered manually to allow for author and validator discretion.
+# Do NOT remove tables beginning with 
+```{r}
+rm("table_103", "table_112", "table_232", "table_233", "table_43", "table_53", "table_62", "table_63", "table_72", "table_73", "table_82", "table_83", "table_92", "table_93")
+```
+
+# Assign region and MSA costs to counties. 
+# region_to_county key outlines which market (first or second) should be applied if an MSA is missing a value. (And there are plenty)
+print(region_to_county_key)
+# Problem: A county assigned to a particular MSA does not always fall into the First or Second Market. 
+# Therefore, costs must be calculated by county, not MSA and region. The challenge is calling in the correct Market using the key, and the precense of missing values in an MSAs 3 costs (center, group, family). Primary and secondary table values (MSA or Market values) are assigned and linked using the key and code below. 
+
+```{r assignments}
+#Assign values of the MSAs or Markets to counties based on table_key, region_to_county_key
+
+master_key <- region_to_county_key
+
+master_key1 <- master_key %>%
+  left_join(table_key %>% select (region_name, region_table_number = table_number), # Bring in the table_number associated with the Primary_MSA_Market
+            by = c("Primary_MSA_Market" = "region_name")) %>%
+  mutate(primary_table_number = region_table_number) %>%  #Rename
+  select(-region_table_number)  #Delete region_table_number to prep for secondary_table_number addition
+
+master_key2 <- master_key1 %>%
+  left_join(table_key %>% select (region_name, region_table_number = table_number), # Bring in the table_number associated with the Primary_MSA_Market
+            by = c("Secondary_Market" = "region_name")) %>%
+  mutate(secondary_table_number = region_table_number) %>%  #Rename
+  select(-region_table_number)  #Delete region_table_number to prep for secondary_table_number addition
+
+master_key_simple <- master_key2 %>%
+  select(-`Primary_MSA_Market`, -`Secondary_Market`, -`MSA`, -`Market`)
+
+#### Code to perform the primary and secondary assignments in R, instead of excel. Save for future. 
+#master_key <- region_to_county_key %>%
+#  left_join(table_key %>% select(region_name, market_table_number = table_number),
+#            by = c("Market" = "region_name"))
+
+#master_key1 <- master_key %>%
+#  left_join(table_key %>% select (region_name, region_table_number = table_number), 
+#            by = c("MSA" = "region_name"))
+
+#master_key2 <- master_key1 %>%
+#  left_join(table_key %>% select(region_name, primary_table_number = table_number),
+#            by = c("Primary_MSA_Region" = "region_name"))
+  
+#master_key3 <- master_key2 %>%
+#  mutate(`secondary_table_number` = `market_table_number`)
+
+#master_key_final <- master_key3 %>%
+#  select(-`market_table_number`, -`region_table_number`, -`MSA`, -`Market`)
+
+```
+
+```{r remove extra df}
+rm(master_key2, master_key1)
+```
+
+# 2/13 idea after Python fail: 
+# Join all remaining MSA and Market costs together. Assign Market costs for missing MSAs manually. 
+# Join MSA tables. 
+
+```{r combine region tables}
+#Manually joining tables. Can't use function because different data (center, group, family) is missing. Center never missed. 
+# a means that missing values (either tables ending in -1, -2, -3) are replaced with First Market values. Tables 21X 
+# b means that missing values are replaced with Second Market values. Tables 22X
+# c means that there were no missing values. All c tables were saved as a and b for matching purposes. 
+
+#IF a region is missing data, each combination of table (First market and Second market) is created. The correct table will be assigned to counties later. 
+#Visually confirm presence or absence of a center(1), group(2), or family(3) table in the global environment. Tables created in same order for ease.  
+
+# Validator - use the # in the comment, in the 3rd line to quick check if the correct table was brought in. 
+#                                               table_213...Family, 3). Or table_212...Group, 2). 21X - First Market. 22X - Second Market
+#   table_100a <- table_101 %>%
+#     left_join(table_102, by = "region") 
+#   table_100a <- bind_cols(table_100a, table_213) #First Market (missing data: Family, 3)
+#     mutate(assigned_costs_table = "100a")             #Add table number to row
+
+# 100 Knoxville
+table_100a <- table_101 %>%
+  left_join(table_102, by = "region") 
+table_100a <- bind_cols(table_100a, table_213)  %>%    #First Market (missing data: Family, 3)
+  mutate(assigned_costs_table = "100a")                      #add table number to row
+
+table_100b <- table_101 %>%
+  left_join(table_102, by = "region") 
+table_100b <- bind_cols(table_100b, table_223) %>%  #Second Market Family (missing data: Family, 3)
+   mutate(assigned_costs_table = "100b")                      #add table number to row                                                     
+
+# 110 Memphis
+table_110a <- table_111 %>%
+  left_join(table_113, by = "region") 
+table_110a <- bind_cols(table_110a, table_212) %>%  #First Market Group (missing data: Group, 2)
+  mutate(assigned_costs_table = "110a")
+
+table_110b <- table_111 %>%
+  left_join(table_113, by = "region") 
+table_110b <- bind_cols(table_110b, table_222)  %>% #Second Market Group (missing data: Group, 2)
+  mutate(assigned_costs_table = "110b")
+  
+#130 Nashville -                            #ALL data present
+
+table_130c <- table_131 %>%
+  left_join(table_132, by = "region")
+table_130c <- bind_cols(table_130c, table_133)
+
+#Create first and second market placeholder tables
+table_130a <- table_130c %>%
+   mutate(assigned_costs_table = "130a")
+table_130b <- table_130c %>%
+   mutate(assigned_costs_table = "130b")
+                
+#210 First Market -                         #ALL data present
+table_210c <- table_211 %>%
+  left_join(table_212, by = "region")
+table_210c <- bind_cols(table_210c, table_213)
+#Create first and second market placeholder tables
+table_210a <- table_210c %>%
+   mutate(assigned_costs_table = "210a")
+table_210b <- table_210c %>%
+   mutate(assigned_costs_table = "210b")
+
+#220 Second Market -                        #ALL data present
+table_220c <- table_221 %>%
+  left_join(table_222, by="region")
+table_220c <- bind_cols(table_220c, table_223)
+#Create first and second market placeholder tables
+table_220a <- table_220c %>%
+   mutate(assigned_costs_table = "220a")
+table_220b <- table_220c %>%
+   mutate(assigned_costs_table = "220b")
+
+#230 Morristown - - MISSING Group and Family
+table_230a <- bind_cols(table_231, table_212, table_213) %>% #First Market (missing data: Group, 2; Family, 3)
+  mutate(assigned_costs_table = "230a") 
+
+table_230b <- bind_cols(table_231, table_222, table_223)  %>% #Second Market (missing data: Group, 2; Family, 3)
+  mutate(assigned_costs_table = "230b")
+
+#40 Chattanooga
+table_40a <- table_41 %>%
+  left_join(table_42, by ="region")
+table_40a <- bind_cols(table_40a, table_213) %>% #First Market (missing data: Family, 3)
+  mutate(assigned_costs_table = "40a") 
+
+table_40b <- table_41 %>%
+  left_join(table_42, by="region")
+table_40b <- bind_cols(table_40b,  table_223)  %>% #Second Market Family (missing data: Family, 3)
+  mutate(assigned_costs_table = "40b") 
+
+#50 Clarksville
+table_50a <- table_51 %>%
+  left_join(table_52, by ="region")
+table_50a <- bind_cols(table_50a, table_213)  %>% #First Market (missing data: Family, 3)
+  mutate(assigned_costs_table = "50a") 
+
+table_50b <- table_51 %>%
+  left_join(table_52, by="region")
+table_50b <- bind_cols(table_50b,  table_223)  %>% #Second Market Family (missing data: Family, 3)
+  mutate(assigned_costs_table = "50b") 
+
+#### All MSAs after only have center. Check code once, and then only change was the 6, 7, 8, 9. (It was copied and pasted.) 
+
+#60 Cleveland - MISSING Group and Family
+table_60a <- bind_cols(table_61, table_212, table_213) %>% #First Market (missing data: Group, 2; Family, 3)
+  mutate(assigned_costs_table = "60a") 
+
+table_60b <- bind_cols(table_61, table_222, table_223)  %>% #Second Market (missing data: Group, 2; Family, 3)
+  mutate(assigned_costs_table = "60b")
+  
+#70 Jackson - MISSING Group and Family
+table_70a <- bind_cols(table_71, table_212, table_213) %>%
+  mutate(assigned_costs_table = "70a")                      #First Market (missing data: Group, 2; Family, 3)
+
+table_70b <- bind_cols(table_71, table_222, table_223) %>%
+  mutate(assigned_costs_table = "70b")                      #Second Market (missing data: Group, 2; Family, 3)
+
+#80 Johnson City - MISSING Group and Family
+table_80a <- bind_cols(table_81, table_212, table_213) %>%
+  mutate(assigned_costs_table = "80a")                       #First Market (missing data: Group, 2; Family, 3)
+
+table_80b <- bind_cols(table_81, table_222, table_223) %>%
+  mutate(assigned_costs_table = "80b")                     #Second Market (missing data: Group, 2; Family, 3)
+
+#90 Kingsport-Bristol - MISSING Group and Family
+table_90a <- bind_cols(table_91, table_212, table_213) %>%
+  mutate(assigned_costs_table = "90a")                    #First Market (missing data: Group, 2; Family, 3)
+
+table_90b <- bind_cols(table_91, table_222, table_223) %>%
+  mutate(assigned_costs_table = "90b")                     #Second Market (missing data: Group, 2; Family, 3)     
+
+#230 up above was also missing group and family data. 
+
+```
+# Bind the rows in one dataframe
+```{r}
+assigned_costs_tables_list <- list(table_100a, table_100b, table_110a, table_110b, table_130a, table_130b, table_210a, table_210b, table_220a, table_220b, table_230a, table_230b, table_40a, table_40b, table_50a, table_50b, table_60a, table_60b, table_70a, table_70b, table_80a, table_80b, table_90a, table_90b)
+
+#Create one assigned costs table
+combined_table <- bind_rows(assigned_costs_tables_list)
+
+#Drop extra columns, 
+combined_table <- combined_table %>%
+  select(-Facility.x, -Facility.y, -region...7, -Facility, -region...20, -Facility...1, -Facility...8, -Facility...15, -region...14, -region...21) %>% 
+  rename_with(~ gsub("[^a-zA-Z0-9]+", "_", tolower(.x)))
+
+```
+
+
+# School-age out family-home for table 130 is missing. Mulitply the school-age in school value by (9/5) as (5/9) is the conversion from school-age out to in. 
+```{r missing value}
+#Make all relevant data numeric
+combined_table <- combined_table %>%
+  mutate(across(-assigned_costs_table, as.numeric))
+
+combined_table <- combined_table %>%
+  mutate(school_age_out_family_home = case_when(
+    assigned_costs_table %in% c("130a", "130b") ~ (9/5) * school_age_in_family_home,
+    TRUE ~ school_age_out_family_home  # Keep other values unchanged
+  ))
+  
+```
+
+# Create a key denoting which assigned_costs_table goes to a combination of primary and secondary tables. Check. All a's should have 210 in the secondary table. All b's should have 220. 
+
+```{r}
+#Create name key: 
+combo_key <- data.frame(
+assigned_costs_table = c("210a", "220a", "40a", "50a", "60a", "70a", "80a", "90a", "100a", "110a", "230a", "130a", "210b", "220b", "40b", "50b", "60b", "70b", "80b", "90b", "100b", "110b", "230b", "130b"),
+primary_table_number = c("210", "220", "40", "50", "60", "70", "80", "90", "100", "110", "230", "130", "210", "220", "40", "50", "60", "70", "80", "90", "100", "110", "230", "130"),
+secondary_table_number = c("210", "210", "210", "210", "210", "210", "210", "210", "210", "210", "210", "210", "220", "220", "220", "220", "220", "220", "220", "220", "220", "220", "220", "220")
+)
+```
+
+# Create a county key that assigns the cost table i.e. 40a, 40b. 
+
+```{r match}
+county_costs_key <- master_key_simple %>%
+  left_join(combo_key, by =c("primary_table_number", "secondary_table_number"))
+
+```
+
+#Match the county key to the costs. Now you can use the formulas to calculate the dang costs!
+
+```{r}
+county_costs_raw <- county_costs_key %>%
+  left_join(combined_table, by= c("assigned_costs_table"))
+
+```
+
+#Remove excess dataframes
+```{r remove}
+rm(table_100, table_100a, table_100b, table_101, table_102, table_110, table_110a, table_110b, table_111, table_113, table_130, table_130a, table_130b, table_130c, table_131, table_132, table_133, table_210, table_210a, table_210b, table_210c, table_211, table_212, table_213, table_220, table_220a, table_220b, table_220c, table_221, table_222, table_223, table_230, table_230a, table_230b, table_231, table_40, table_40a, table_40b, table_41, table_50, table_50a, table_50b, table_51, table_52, table_61, table_71, table_81, table_42, table_60, table_60a, table_60b, table_70a, table_70, table_70b, table_80, table_80a, table_80b, table_90, table_90a, table_90b, table_91)
+
+```
+
+#Convert weekly to monthly costs. 
+```{r monthly conversion}
+
+# Convert weekly costs into Monthly costs
+
+county_costs_monthly <- county_costs_raw %>%
+  mutate(across(
+    -c(assigned_costs_table, secondary_table_number, primary_table_number, countyname),
+    ~ .x * monthly_conversion))
+
+```
+
+#Convert to SSS age categories
+```{r SSS age categories}
+#No changes to school age in and out here. 
+
+county_costs_SSS_ages <- county_costs_monthly %>%   # Multiple age costs by their share of the age contribution. No changes to school-age
+  mutate(
+    infant_costs_center = (infant_center * infant_0_11_months) + (toddler_center * toddler_12_24_months), 
+    infant_costs_group_home = (infant_group_home * infant_0_11_months) + (toddler_group_home * toddler_12_24_months),
+    infant_costs_family_home = (infant_family_home * infant_0_11_months) + (toddler_family_home * toddler_12_24_months),
+    preschooler_costs_center = (two_years_old_and_over_center * preschooler_25_months_and_over),
+    preschooler_costs_group_home = (two_years_old_and_over_group_home * preschooler_25_months_and_over), 
+    preschooler_costs_family_home = (two_years_old_and_over_family_home * preschooler_25_months_and_over),
+  ) %>%
+  select(-infant_center, -infant_group_home, - infant_family_home, -toddler_center, -toddler_group_home, -toddler_family_home, -two_years_old_and_over_center, -two_years_old_and_over_group_home, -two_years_old_and_over_family_home) # Remove old columns
+
+``` 
+
+# Average group and family home costs
+
+```{r group and family home}
+county_costs_gfhome <- county_costs_SSS_ages %>%
+  mutate(
+    infant_costs_home = (infant_costs_group_home + infant_costs_family_home)/2, 
+    preschooler_costs_home = (preschooler_costs_group_home + preschooler_costs_family_home)/2, 
+    school_age_in_home = (school_age_in_group_home + school_age_in_family_home)/2, 
+    school_age_out_home = (school_age_out_group_home + school_age_out_family_home)/2, 
+  ) %>%
+  select(-infant_costs_group_home, -infant_costs_family_home, -preschooler_costs_group_home, -preschooler_costs_family_home, -school_age_in_group_home, -school_age_in_family_home, -school_age_out_group_home, -school_age_out_family_home) #Remove old columns
+
+#Leaves us at 1 center and 1 family cost value for infant, preschooler, school age in, and school age out.
+
+```
+
+# Calculate monthly school-age values (combining in and out of school)
+```{r school-age}
+county_costs_schoolage <- county_costs_gfhome %>%
+  mutate(
+    schoolage_costs_center = (school_age_in_center * before_after_school_care) + (school_age_out_center * full_time_care),
+    schoolage_costs_home = (school_age_in_home * before_after_school_care) + (school_age_out_home * full_time_care)
+  ) %>%
+  select(
+    -school_age_out_center, -school_age_in_center, -school_age_out_home, -school_age_in_home
+  )   #Remove old columns
+
+
+```
+
+# Create costs with weighted facility ratios
+
+```{r facility ratios}
+
+county_costs_clean <- county_costs_schoolage %>%
+        mutate(
+          infant = (infant_center_weight * infant_costs_center) +
+                   (infant_home_weight * infant_costs_home),
+          preschooler = (preschooler_center_weight * preschooler_costs_center) +
+                        (preschooler_home_weight * preschooler_costs_home),
+          school_age = (school_center_weight * schoolage_costs_center) +
+                       (school_home_weight * schoolage_costs_home)
+        ) %>%
+    select(-`infant_costs_center`, -`preschooler_costs_center`, -`schoolage_costs_center`, 
+         -`infant_costs_home`, -`preschooler_costs_home`, -`schoolage_costs_home`)
+  
+```
+
+## Match county costs to SSS geographies 
+
+```{r match counties}
+
+county_costs_final <- county_costs_clean %>%
+  select(-primary_table_number, -secondary_table_number, -assigned_costs_table)
+
+state_geographies <- read_csv(state_geographies)
+
+final_result <- state_geographies %>%
+  left_join(county_costs_final, by = "countyname")
+```
+#Test for missing values
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+
+```
+
+```{r}
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+
+```

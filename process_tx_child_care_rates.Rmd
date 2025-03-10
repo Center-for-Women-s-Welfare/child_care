@@ -1,0 +1,418 @@
+---
+project: "Texas_Child_Care"
+script purpose: Script calculates TX 2025 child care costs
+author: "Sarah Brolliar"
+date created: "2024-11-04"
+last modified: "2025-01-10"
+last editor: "Sbr"
+---
+
+## 1.Setup-----------------
+
+```{r setup, include=FALSE}
+
+state <- "texas"
+state_abbrev <- "TX"
+state_abbrev_lowercase <- "tx"
+SSS_year <- "2025"
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+# Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(readr)
+
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  "2025", 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  "2025", 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  "2025", 
+  "child_care")
+ 
+#dir.create(output_path, showWarnings = FALSE)  # Create output directory if not present
+
+
+```
+
+## Editing history
+```{r}
+#1/10/2025 - Edits made to filepaths for movement to the new directory made by SBr. 
+# 1/17/2025 = Validation by AKu
+## moved the remove NA values from result up before the county concat in order to successfully remove the state of TX values, which were not being removed previously.
+```
+## State specific data
+```{r notes}
+#CCDF landing page = <https://txicfw.socialwork.utexas.edu/2024-texas-child-care-market-rate-survey/>
+
+raw_data_source <- file.path(base_path_raw, "2024 Texas Child Care Market Rate Survey.pdf")
+raw_data <- file.path(base_path_processed, "SupplementalReport_2024_Market_Rate_14Jun2024_nocalc_Rinput.xlsx")
+state_geographies <- file.path(reference_path, "state_geo_list", "TX_geographies.csv")
+county_assignments <- file.path(base_path_processed, "TX_LWDA_County.xlsx")
+checked_by <- ""
+
+#Survey inputs
+citation <- "Schroeder, D., Marra, L. & Faulkner, M. (2024). 2024 Texas Child Care Market Rate Survey: Final Report prepared for the Texas Workforce Commission. Austin, TX: The University of Texas at Austin, Ray Marshall Center for the Study of Human Resources, Texas Institute for Child & Family Wellbeing"
+accessed_date <- 10/31/2024
+accessed_by <- "Sbr"
+calculations_by <- "Sbr"
+checked_by <- "Aku"
+
+#Survey period
+survey_start_month <- "September"
+survey_start_yr <- "2023"
+survey_end_month <- "May"
+survey_end_year <- "2024"
+Base_CPI_month <- "January"
+Base_CPI_year <- "2024"
+CPI_checker <- "Aku"
+
+#state age definitions
+infant_0_11_months_ratio <- (1/3)
+infant_12_17_months_ratio <- (1/6)
+infant_18_23_months_ratio <- (1/6)
+infant_2_years_ratio <- (1/3)
+preschooler_3years_ratio <- (1/3)
+preschooler_4years_ratio <- (1/3)
+preschooler_5years_ratio <- (1/3)
+school_age_ratio <- 1
+
+#TX has daily rates
+reported_rate <- "daily"
+#convert daily rates to monthly
+monthly_conversion <- 5*(52/12)
+#weekly_monthly <- 4.33
+#hourly_monthly <- ___*5*(52/12)
+#daily_monthly <- 5*(52/12)
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+
+```{r cleanup}
+
+# Load the Excel file
+df <- read_excel(raw_data) 
+
+# Rename columns for clarity (optional but helpful)
+colnames(df) <- c("Location", "Facility_Type", "Age_Group", "Age_Years", "Care_Type", "Mean", "30th_Percentile", 
+                  "40th_Percentile", "Median", "60th_Percentile", "70th_Percentile", "75th_Percentile")
+
+# Remove rows where Location is NA
+df_2 <- df %>%
+  filter(!is.na(Location))
+
+#Drop unneeded columns
+df_3 <- df_2 %>%
+  select(-"Age_Group", -"Mean", -"30th_Percentile", -"40th_Percentile", -"Median", -"60th_Percentile", -"70th_Percentile")
+
+# Fill missing Age_Group values downwards
+df_4 <- df_3 %>% fill(Facility_Type, Age_Years, .direction = "down")
+```
+
+## Widen the dataset, trimming extra columns as you go
+
+```{r widen}
+# Convert to wide format
+  #Care_type, or part time vs. full time care, is the variable brought out of the column into the row
+df_wide_care_type <- df_4 %>%
+  pivot_wider(
+    names_from = Care_Type,
+    values_from = c("75th_Percentile")
+  )
+
+#Shorten the child care facility labels for ease
+df_wide_care_type <- df_wide_care_type %>%
+  mutate(Facility_Type = substr(Facility_Type, 1, 25))
+
+df_wide_care_type <- df_wide_care_type %>%
+  mutate(Facility_Type = case_when(
+    Facility_Type == "Licensed Child Care Cente" ~ "Center",
+    Facility_Type == "Registered Child Care Hom" ~ "R_Home",
+    Facility_Type == "Licensed Child Care Homes" ~ "L_Home",
+    TRUE ~ Facility_Type  # Keeps other values unchanged
+  ))
+
+# Convert to wide format
+  #Bring the age_years out of the column into the row
+df_wide_age_years <- df_wide_care_type %>%
+  pivot_wider(
+    names_from = "Age_Years",
+    values_from = c("Full-day", "Part-day")
+  )
+
+#Drop all part-time care columns for anyone not a school child
+df_wide_age_years <- df_wide_age_years %>%
+  select(-'Part-day_0-11 months', -'Part-day_12-17 months', -'Part-day_18-23 months', -'Part-day_2 years', - 'Part-day_3 years', -'Part-day_4 years', -'Part-day_5 years') 
+
+```
+
+## Convert data into SSS age categories
+
+```{r convert to SSS ages}
+#Weight ages to fit into SSS age classifications: 
+  #infant: 1/3*0-11 months, 1/6*12-17 months, 1/6*18-23 months, 1/3*2years
+  #preschooler: 1/3*3 years, 1/3*4 years, 1/3*5 years
+  #school-age: 6-13 years
+
+#First, ensure that they are numeric
+df_SSS_ages <- df_wide_age_years %>%
+  mutate(
+    `Full-day_0-11 months` = as.numeric(`Full-day_0-11 months`),
+    `Full-day_12-17 months` = as.numeric(`Full-day_12-17 months`),
+    `Full-day_18-23 months` = as.numeric(`Full-day_18-23 months`),
+    `Full-day_2 years` = as.numeric(`Full-day_2 years`),
+    `Full-day_3 years` = as.numeric(`Full-day_3 years`),
+    `Full-day_4 years` = as.numeric(`Full-day_4 years`),
+    `Full-day_5 years` = as.numeric(`Full-day_5 years`),
+    `Full-day_6-13 years` = as.numeric(`Full-day_6-13 years`),
+    `Part-day_6-13 years` = as.numeric(`Part-day_6-13 years`),
+
+# Now create the SSS age categories
+infant_full_daily = infant_0_11_months_ratio * `Full-day_0-11 months` + infant_12_17_months_ratio * `Full-day_12-17 months` + infant_18_23_months_ratio * `Full-day_18-23 months` + infant_2_years_ratio * `Full-day_2 years`, 
+
+preschooler_full_daily = preschooler_3years_ratio * `Full-day_3 years` + preschooler_4years_ratio * `Full-day_4 years` +  preschooler_5years_ratio * `Full-day_5 years`,
+
+schoolage_full_daily = `Full-day_6-13 years`,
+schoolage_part_daily = `Part-day_6-13 years`
+)
+
+#Drop month and year specific columns, leaving only SSS age categories
+df_SSS_ages <- df_SSS_ages %>%
+  select(-`Full-day_0-11 months`, -`Full-day_12-17 months`, -`Full-day_18-23 months`, 
+         -`Full-day_2 years`, -`Full-day_3 years`, -`Full-day_4 years`, 
+         -`Full-day_5 years`, -`Full-day_6-13 years`, -`Part-day_6-13 years`)
+```
+
+## Combine schoolage part and full time care (weighted)
+
+```{r combine schoolage part and full}
+# Weight part and full time care for school-age children into a single value
+    # Confirm columns are numeric
+    # Weight the full and part time care for schoolage children
+    # Remove the unneeded full time and part time columns 
+df_SSS_ages_weight_schoolage_care <- df_SSS_ages %>%
+  mutate(
+    schoolage_full_daily = as.numeric(schoolage_full_daily),
+    schoolage_full_daily = as.numeric(schoolage_part_daily),
+    schoolage_combinedcare_daily = (full_time_care * schoolage_full_daily) + (before_after_school_care * schoolage_part_daily)
+  )
+
+df_SSS_ages_weight_schoolage_care <- df_SSS_ages_weight_schoolage_care %>%
+  select(- schoolage_full_daily, - schoolage_part_daily)
+```
+
+## Convert daily to monthly costs
+
+```{r daily to monthly}
+# Convert daily costs into Monthly costs
+  #remove the daily cost columns
+df_SSS_ages_monthly <- df_SSS_ages_weight_schoolage_care %>%
+  mutate(
+    schoolage_combinedcare_monthly = schoolage_combinedcare_daily*monthly_conversion,
+    infant_full_monthly = infant_full_daily*monthly_conversion,
+    preschooler_full_monthly = preschooler_full_daily*monthly_conversion 
+  )
+df_SSS_ages_monthly <- df_SSS_ages_monthly %>%
+select(- 'infant_full_daily', - 'preschooler_full_daily', -'schoolage_combinedcare_daily')
+```
+
+## Widen the data set to get weighted child care costs by SSS age and facility ratios, trimming as you go
+
+```{r widen for SSS age and facility}
+# Convert to wide format
+# Bring the facility type out of the column and into one row
+df_SSS_ages_monthly_wide_facility_type <- df_SSS_ages_monthly %>%
+  pivot_wider(
+    names_from = "Facility_Type",
+    values_from = c("schoolage_combinedcare_monthly", "infant_full_monthly", "preschooler_full_monthly")
+  )
+
+# Combine the two home costs by SSS age group
+# Texas has registered and licensed homes. Average them together, unweighted.
+df_SSS_ages_monthly_center_home <- df_SSS_ages_monthly_wide_facility_type %>%
+  mutate(
+    infant_full_monthly_home = (infant_full_monthly_L_Home + infant_full_monthly_R_Home) / 2,  
+    preschooler_full_monthly_home = (preschooler_full_monthly_L_Home + preschooler_full_monthly_R_Home) / 2,
+    schoolage_combinedcare_monthly_home = (schoolage_combinedcare_monthly_R_Home + schoolage_combinedcare_monthly_L_Home) / 2
+  )
+
+# Drop the separated home columns
+df_SSS_ages_monthly_center_home <- df_SSS_ages_monthly_center_home %>%
+  select(-infant_full_monthly_L_Home, 
+         -infant_full_monthly_R_Home, 
+         -preschooler_full_monthly_L_Home, 
+         -preschooler_full_monthly_R_Home, 
+         -schoolage_combinedcare_monthly_R_Home, 
+         -schoolage_combinedcare_monthly_L_Home)
+
+# Weight SSS age costs by facility
+df_SSS_childcare_monthly_weightedfacility <- df_SSS_ages_monthly_center_home %>%
+  mutate(
+    infant = infant_full_monthly_Center * infant_center_weight + infant_full_monthly_home * infant_home_weight, 
+    preschooler = preschooler_full_monthly_Center * preschooler_center_weight + preschooler_full_monthly_home * preschooler_home_weight, 
+    school_age = schoolage_combinedcare_monthly_Center * school_center_weight + schoolage_combinedcare_monthly_home * school_home_weight
+  )
+
+# Drop the separate facility columns
+df_SSS_childcare_monthly_weightedfacility <- df_SSS_childcare_monthly_weightedfacility %>%
+  select(-infant_full_monthly_Center, 
+         -infant_full_monthly_home, 
+         -preschooler_full_monthly_Center, 
+         -preschooler_full_monthly_home, 
+         -schoolage_combinedcare_monthly_Center, 
+         -schoolage_combinedcare_monthly_home)
+```
+
+#Join the datasets
+```{r}
+# Convert Location to County
+location_to_county <- read_excel(county_assignments, sheet = 1)
+
+# Rename the LWDA column to Location
+df_SSS_childcare_monthly_weightedfacility <- df_SSS_childcare_monthly_weightedfacility %>%
+  rename(LWDA = Location)
+
+# Join the dataframes
+result <- df_SSS_childcare_monthly_weightedfacility %>%
+  left_join(location_to_county, by = "LWDA")
+
+# Remove the LWDA column
+result <- result %>%
+  select(-LWDA)
+
+# Reorder columns to make County the first column
+result <- result %>%
+  relocate(County, .before = everything())
+
+# Remove rows with NA values
+TX2025 <- result %>%
+  drop_na()
+
+# Add " County" to each entry in the County column and rename it to "countyname"
+TX2025 <- TX2025 %>%
+  mutate(County = paste0(County, " County")) %>%
+  rename(countyname = County)
+
+
+
+# View the result
+head(result)
+
+```
+
+## Assign regions to their counties, and county fips codes.
+# Test for NA values. 
+
+```{r assign regions to counties}
+
+# Read the data from region_to_county
+state_geographies <- read_csv(state_geographies)
+state_geographies <- as.data.frame(state_geographies)
+
+# Match SSS data costs to the region and county key
+final_result <- state_geographies %>%
+  left_join(TX2025, by = "countyname")
+
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+
+```
+
+```{r}
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+```

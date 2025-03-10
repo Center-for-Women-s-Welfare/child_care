@@ -1,0 +1,492 @@
+---
+  title: "Ohio_Child_Care"
+author: "Brian Son"
+date: "2024-12-9"
+last modified: "2025-01-17"
+last editor: "Sbr"
+---
+
+## Editing history
+#2/3/2025 - Noted change of school age weighting correction, and subsequent omission of school-age summer values. Fixed SSS age creation, school-age costs. Clean up dataframes. Rename final columns. Move monthly weighting to appropriate place.
+#1/24/2025 - Noted the error of weighting school age PT.FT incorrectly with the facility. Left for BSo. Added chunk descriptions
+#1/22/2025 - Corrections by BSo. 
+#1/17/2025 - Add tests, alerts for validater to check specific items. Edit chunk descriptions for clarity.
+#1/16/2025 - Edits made to filepaths for movement to the new directory made by SBr, file names for standardization. 
+#1/6/2025 - Corrections and standardizations to script, expanded comments.
+
+
+## Load Necessary Packages
+  
+```{r setup, include=FALSE}
+state <- "ohio"
+state_abbrev <- "OH"
+state_abbrev_lowercase <- "oh"
+SSS_year <- "2025"
+
+
+# Install necessary packages if not already installed
+packages <- c("sssUtils", "tidyverse")
+installed <- rownames(installed.packages())
+missing_packages <- packages[!packages %in% installed]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+#Load libraries
+library(sssUtils)  # Custom package
+library(tidyverse) 
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(scales)
+
+#Set base paths
+# Set base path
+base_path <- get_base_path()
+if (!dir.exists(base_path)) {
+  stop("Base path does not exist. Please check your configuration.")
+}
+print(paste("Base path is:", base_path))
+
+# Remove trailing slash from base_path if present
+base_path <- sub("/$", "", base_path)
+
+reference_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "reference")
+
+base_path_raw <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "raw",
+  SSS_year, 
+  "child_care", 
+  state)
+
+base_path_processed <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care", 
+  state)
+
+output_path <- file.path(
+  base_path, 
+  "sss_production",
+  "data",
+  "processed",
+  SSS_year, 
+  "child_care")
+
+```
+
+## State specific data
+ 
+```{r notes}
+#Correct landing page
+CCDF_landing_page <- "https://jfs.ohio.gov/child-care/resources/market-rate-survey"
+
+#raw_data
+raw_data_source <- file.path(base_path_raw, "MarketRateSurvey2022.pdf")
+#LMa advised to use the type B home rates instead of both types A and B being that sample size for type A is 1/6 smaller than the sample size for type B. Followed the conventions of 2022 SSS production.
+center_rate_table <- file.path(base_path_processed, "Center_Rate_Table_2.xlsx")
+type_B_homes_rate <- file.path(base_path_processed, "Type_B_Homes_Rate_Table_2.xlsx")
+state_geographies <- file.path(reference_path, "state_geo_list", "OH_geographies.csv")
+#The regions are referred to as clusters and the county list is combined with the clusters per type of facility 
+region_to_county <-  file.path(base_path_processed, "County List.xlsx")
+region_to_county <- read_excel(region_to_county, sheet = 1)
+region_checked_by <- "SBr"
+###########################################################Validater, check region to county
+
+#Survey inputs
+#citation <- "Schroeder, D., Marra, L., & Faulkner, M. (2022). 2022 Ohio Child Care Market Rate Survey Analysis: Final Report prepared for the Ohio Department of Job and Family Services. Columbus, OH: The Ohio State University, Center for Human Resource Research."
+accessed_date <- 12/8/2024
+accessed_by <- "Bso"
+calculations_by <- "Bso"
+checked_by <- "Sbr"
+
+##"The sampling frame used for the 2022 MRS included ODJFS regulated child care centers, Type A FCC homes, Type B FCC homes, and approved day camps, as well as preschool and school age child care programs licensed by ODE that are not regulated by ODJFS, but with whom they have a provider agreement. For the 2022 survey, 6,396 unique provider locations were identified and included in the sample within the following categories: Type A FCC Home - 284, Type B FCC Home – 1,955, Child Care Center – 4,008, Approved Day Camp - 21, ODE Licensed Preschool - 74, ODE Licensed School Age Child Care – 54"
+
+survey_start_month <- "June"
+survey_start_yr <- "2022"
+survey_end_month <- "August"
+survey_end_year <- "2022"
+base_cpi_month <- "July"
+base_cpi_year <- "2022"
+cpi_checker <- "SBr"
+###########################################################Validater, check cpi
+
+#"Age categories:
+#• Infants (newborn through 17 months)
+#• Toddlers (18 through 35 months)
+#• Preschool (3 years through 5 years and not in school)
+#• School Age (5 years through 12 years and in school) during the regular year
+#• School Age during the summer" Page 22
+
+infant_0_17_months <- .5
+Toddler_18_35_months <- .5
+preschooler_36_60_months <- 1.0
+school_age_60_144_months <- 1.0
+school_age__summer_60_144_months <- 1.0
+age_checker <- "SBr"
+###########################################################Validater, check state ages
+  
+#OH rates reported as weekly. All ages had fulltime, part time, and hourly. 
+#"Service period categories:
+#• Full-time (25 to 60 hours per week)
+#• Part-time (7 to less than 25 hours per week)
+#• Hourly (less than 7 hours per week)" page 22
+# School-age part time was used for before and after school. School-age summer full was used for summertime. 
+#Part-time is defined as 7-25 hours by Ohio. The SSS Manual states that in the instance of hourly rates, before and after school hourly rates are to be multiplied by 5 hours, 5 days a week, therefore, 25 hours. 
+
+#MONTHLY CONVERSION is weekly_monthly
+#weekly_monthly <- 4.33
+#hourly_monthly <- ___*5*(52/12)
+#daily_monthly <- 5*(52/12)
+monthly_conversion <- 4.33
+rates_checker <- "SBr"
+###########################################################Validater, check reported rates
+```
+
+## SSS Definitions, do NOT change per state
+
+```{r SSS Definitions}
+#infant
+infant_center_weight <- .57
+infant_home_weight <- .43
+
+#preschooler
+preschooler_center_weight <- .74
+preschooler_home_weight <- .26
+
+#school-age
+school_center_weight <- .54
+school_home_weight <- .46
+
+#summer weight
+avg_number_insruction_days <- 180
+avg_number_work_days <- 262
+
+#Percentage of workdays in school (before/after school care assumed)
+before_after_school_care <- .69
+
+#Percentage of summer/vacation school days (full time care assumed)
+full_time_care <- .31
+
+#Converting a fulltime school-age rate to a parttime school-age rate
+parttime_conversion <- (5/9)
+```
+
+## Cleanup the dataset
+# Trim out unneeded rows. Some of this was done manually in the excel sheet for ease after mistakes persisted following multiple attempts. Each excel sheet has the unaltered table in another tab for the validater to compare. Sbr 1/17/2025
+```{r cleanup}
+# Load the datasets
+center_rate_table_dirty <- read_excel(file.path(center_rate_table))
+type_B_homes_rate_dirty <- read_excel(file.path(type_B_homes_rate))
+
+# Remove rows that start with NA in column 1 for each dataframe
+#center_rate_table_dirty <- center_rate_table %>% filter(!is.na(.[[1]]))
+#type_B_homes_rate_dirty <- type_B_homes_rate %>% filter(!is.na(.[[1]]))
+
+# Function to remove rows above the "75th Percentile Market Rate"
+remove_above_75th <- function(df, keyword) {
+  keyword_row <- which(grepl(keyword, df[[1]], ignore.case = TRUE))
+  if (length(keyword_row) > 0) {
+    df <- df[keyword_row[1]:nrow(df), ]
+  }
+  return(df)
+}
+
+# Apply the function to each dataframe
+center_rate_table_clean1 <- remove_above_75th(center_rate_table_dirty, "75th percentile market rate")
+type_B_homes_rate_clean1 <- remove_above_75th(type_B_homes_rate_dirty, "75th percentile market rate")
+```
+
+########Confirm output of _clean1 has all Column 2 = FT (full time) for all ages, except school-age =PT
+#Calculate SSS ages. Part I of II
+# Combined the rows for infant and toddler
+# Transpose data, remove extra columns, combine the age categories (infant and toddler) into infants.
+```{r Transpose}
+# Transpose rows to columns
+transpose_rows_to_columns <- function(df) {
+  # Gather the relevant rows into columns
+  transposed <- df %>%
+    filter(.[[1]] %in% c("Age", "Infant", "Toddler", "Preschool", "School Age", "School Age Summer")) %>%
+    pivot_longer(cols = -1, names_to = "Metric", values_to = "Value") %>%
+    pivot_wider(names_from = 1, values_from = Value)
+
+  # Add Cluster rows below the 75th Percentile Market Rate
+  clusters <- df %>%
+    filter(.[[1]] %in% c("Cluster 1", "Cluster 2", "Cluster 3"))
+
+  # Bind the transposed rows and the clusters
+  result <- bind_rows(transposed, clusters)
+  return(result)
+}
+
+# Apply transposition to each dataframe
+center_rate_table_clean2 <- transpose_rows_to_columns(center_rate_table_clean1)
+type_B_homes_rate_clean2 <- transpose_rows_to_columns(type_B_homes_rate_clean1)
+
+# Clean the data: Remove extra columns, the first row, and rename columns
+clean_data <- function(df) {
+  # Identify the column index for "School Age Summer"
+  end_col <- which(names(df) == "School Age Summer")
+  
+  # Keep only the columns up to "School Age Summer"
+  df <- df %>% select(1:end_col)
+
+  # Remove the first row
+  df <- df[-1, ]
+
+  # Remove the first column
+  df <- df %>% select(-1)
+
+  # Rename "Age" column to "Cluster"
+  names(df)[names(df) == "Age"] <- "Cluster"
+
+  return(df)
+}
+
+# Apply cleaning function to each dataframe
+center_rate_table_clean3 <- clean_data(center_rate_table_clean2)
+type_B_homes_rate_clean3 <- clean_data(type_B_homes_rate_clean2)
+
+# Combine Infant and Toddler into a new Infant column after ensuring numeric types
+combine_infant_toddler <- function(df) {
+  df <- df %>%
+    mutate(
+      Infant = as.numeric(Infant),  # Convert to numeric
+      Toddler = as.numeric(Toddler),  # Convert to numeric
+      Infant = (Infant * infant_0_17_months) + (Toddler * Toddler_18_35_months)  # Combine weighted values
+    ) %>%
+    select(-Toddler)  # Remove the original Toddler column
+  return(df)
+}
+
+# Apply to both dataframes
+center_rate_table_clean4 <- combine_infant_toddler(center_rate_table_clean3)
+type_B_homes_rate_clean4 <- combine_infant_toddler(type_B_homes_rate_clean3)
+
+```
+
+########Confirm successful transformation from clean1 to clean4. 
+#Remove extra dfs.
+```{r}
+Confirmed_cleaning <- "Sbr"
+#Rename the cleaned data
+center_rate_table <- center_rate_table_clean4
+type_B_homes_rate_table <- type_B_homes_rate_clean4
+
+#Remove extra dataframes
+rm(type_B_homes_rate_dirty, type_B_homes_rate_clean1, type_B_homes_rate_clean2, type_B_homes_rate_clean3, type_B_homes_rate_clean4, center_rate_table_dirty, center_rate_table_clean1, center_rate_table_clean2, center_rate_table_clean3, center_rate_table_clean4)
+
+```
+
+#Calculate SSS ages. Part II of II
+#Create school-age values (combine full time and part time by ratios)
+```{r }
+#For Center rates - confirm numeric
+center_rate_table <- center_rate_table %>%
+  mutate(
+    `Infant` = as.numeric(Infant),
+    `Preschool` = as.numeric(Preschool),
+    `School Age` = as.numeric(`School Age`),
+    `School Age Summer` = as.numeric(`School Age Summer`)
+  )
+
+# Denote "School Age" as part time, and remove the original "School Age" column
+center_rate_table1 <- center_rate_table %>%
+  mutate(
+    `School Age Part` = `School Age`
+  ) %>%
+  select(-`School Age`)
+
+
+# For type_B_homes_rate - confirm numeric
+type_B_homes_rate_table <- type_B_homes_rate_table %>%
+  mutate(
+    `Infant` = as.numeric(Infant),
+    `Preschool` = as.numeric(Preschool),
+    `School Age` = as.numeric(`School Age`),
+    `School Age Summer` = as.numeric(`School Age Summer`)
+  )
+
+# Denote "School Age" as part time, and remove the original "School Age" column
+type_B_homes_rate_table1 <- type_B_homes_rate_table %>%
+  mutate(
+    `School Age Part` = `School Age`
+  ) %>%
+  select(-`School Age`)
+
+
+# Apply time weights to "School Age Summer" and "School Age Part" for center
+center_SSS_ages <- center_rate_table1 %>%
+  mutate(
+    school_age = (`School Age Summer` * full_time_care) + (`School Age Part` * before_after_school_care)  # Weighted School
+  ) %>%
+  select(-`School Age Summer`, -`School Age Part`)  # Remove original columns
+
+# Apply time weights to "School Age Summer" and "School Age Part" for home
+type_B_homes_SSS_ages <- type_B_homes_rate_table1 %>%
+  mutate(
+    school_age = (`School Age Summer` * full_time_care) + (`School Age Part` * before_after_school_care)
+  ) %>%
+  select(-`School Age Summer`, -`School Age Part`)  # Remove original columns
+```
+
+
+#Remove extra dfs
+```{r remove}
+rm(center_rate_table, center_rate_table1, type_B_homes_rate_table, type_B_homes_rate_table1)
+
+```
+
+
+# Weight child care costs by their facility ratios. 
+```{r }
+# Apply initial weights for center_rate_table and remove original columns
+center_rate_weighted <- center_SSS_ages %>%
+  mutate(
+    `infant_center` = `Infant` * infant_center_weight,
+    `preschool_center` = `Preschool` * preschooler_center_weight,
+    `school_age_center` = `school_age` * school_center_weight) %>% 
+ select(-`Infant`, -`Preschool`, -`school_age`)
+
+# Apply initial weights for center_rate_table and remove original columns
+type_B_homes_rate_weighted <- type_B_homes_SSS_ages %>%
+  mutate(
+    `infant_homes` = `Infant` * infant_home_weight,
+    `preschool_homes` = `Preschool` * preschooler_home_weight,
+    `school_age_homes` = `school_age` * school_home_weight) %>%
+  select(-`Infant`, -`Preschool`, -`school_age`)
+
+```
+
+#Create final costs by adding the weighted center and family costs together.
+############## See output of the the following chunk: combined_data. The costs for preschool and school-age are almost the same. This is a red flag. 
+```{r }
+# Combine datasets and calculate totals and averages for School Age
+combined_data <- type_B_homes_rate_weighted %>%
+  inner_join(center_rate_weighted, by = "Cluster", suffix = c("_typeB", "_center")) %>%
+  mutate(
+    infant = infant_center + infant_homes,
+    preschooler = preschool_center + preschool_homes,
+    school_age = school_age_center + school_age_homes
+  ) %>%
+  select(Cluster, infant, preschooler, `school_age`) # Keep only relevant columns
+```
+
+##Convert rates to monthly, currency
+```{r Multiply the weekly to monthly conversion}
+combined_data <- combined_data %>%
+  mutate(across(
+    c(`infant`, `preschooler`, `school_age`),
+     ~ dollar(as.numeric(.) * monthly_conversion),  # Convert to currency format
+    .names = "{.col}"
+  ))
+
+rm(center_rate_weighted, type_B_homes_rate_weighted, center_SSS_ages, type_B_homes_SSS_ages)
+
+```
+
+#Clean up region to county sheet
+#County Data Merging: The county list from the report had multiple columns of the same name adjacent, necessitating a transformation to remove the 2020 cluster comparison, and stacking county to county columns. It was difficult to stack because the column names for counties were the same "County" So I needed to get the names of each unique column name to stack ontop of the column 1 "County" name and then match the output to match the county_to_region dataframe by adding "county" to the output then I joined the dataframes together center and family facilities. I had manually edited the excel so that county and cluster populated in columns 1 and 2 respectively because it was too difficult to have code edit it. 
+
+```{r Clean the region to county sheet}
+# Remove columns 2, 5, and 8 from the dataframe
+region_to_county_cleaned <- region_to_county %>%
+  select(-2)
+# Update column names using the first row of the dataframe
+region_to_county_cleaned <- region_to_county_cleaned %>%
+  setNames(as.character(unlist(region_to_county_cleaned[1, ]))) %>%  # Set the first row as column names
+  slice(-1)  # Remove the first row, as it is now the header
+
+  # View the cleaned dataframe
+region_to_county_cleaned
+```
+#Assign cluster costs to counties
+```{r}
+# Ensure all columns in combined_data are numeric
+combined_data1 <- combined_data %>%
+  rename(`2022 Cluster` = Cluster) %>%
+  mutate(`2022 Cluster` = c(1, 2, 3))  # Replace with respective row values
+
+rm(region_to_county)
+# Rename the second column to "2022 Cluster" and ensure it is numeric in region_to_county_cleaned
+region_to_county_cleaned <- region_to_county_cleaned %>%
+  rename(`2022 Cluster` = 2) %>%
+  mutate(`2022 Cluster` = as.numeric(`2022 Cluster`))  # Convert the second column to numeric
+
+# Merge with region_to_county_cleaned
+assigned_counties_rough <- region_to_county_cleaned %>%
+  left_join(combined_data1, by = "2022 Cluster")
+
+# Clean column 1 and perform required transformations on final_data
+assigned_counties <- assigned_counties_rough %>%
+  # Remove punctuation from the first column, add " County" suffix
+  mutate(
+    countyname = gsub("[[:punct:]]", "", .[[1]]),  # Remove punctuation
+    countyname = paste0(countyname, " County")    # Add " County" suffix
+  ) %>%
+  select(countyname, everything()) %>%  # Move countyname to first column
+  select(-`2022 Cluster`, -matches("(?i)^County$"))  # Remove '2022 Cluster' and any column named 'County' (case insensitive)
+
+```
+
+```{r}
+#Remove extra dataframes
+rm(combined_data, combined_data1, region_to_county_cleaned, assigned_counties_rough)
+```
+
+## Assign costs to counties, and county fips codes.
+
+```{r assign county costs to FIPS codes}
+# Load state_geographies dataset
+state_geographies <- read_csv(state_geographies)
+
+# Join final_region_to_county_weighted with state_geographies
+final_result <- state_geographies %>%
+  left_join(assigned_counties, by = "countyname")
+
+#Remove extra dataframes
+#rm(final, final_result, state_geographies)
+```
+
+```{r test data}
+# Check if 'infant' column has NA
+any(is.na(final_result$infant))
+
+# Check if 'preschooler' column has NA
+any(is.na(final_result$preschooler))
+
+# Check if 'school_age' column has NA
+any(is.na(final_result$school_age))
+
+```
+
+#Save file
+```{r}
+# Get today's date in YYYY-MM-DD format
+today_date <- Sys.Date()
+
+# Define initials (replace "ABC" with your initials)
+initials <- calculations_by
+
+# Create the dynamic filename
+filename <- paste0("processed_child_care_", state_abbrev_lowercase, "_", SSS_year, ".csv")
+
+# Define the full file path
+full_file_path <- file.path(output_path, filename)
+
+# Save the final_region_county_list dataframe as a CSV file
+write.csv(final_result, file = full_file_path, row.names = FALSE)
+
+# Print confirmation
+message("File saved as: ", filename)
+```
